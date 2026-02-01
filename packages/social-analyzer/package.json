@@ -1,0 +1,41 @@
+{
+  "name": "@cst/social-analyzer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Social media sentiment analyzer for crypto tokens (Twitter, Reddit, Telegram)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsup src/index.ts src/server.ts --format cjs,esm --dts",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^4.26.0",
+    "@fastify/cors": "^9.0.0",
+    "@fastify/rate-limit": "^9.1.0",
+    "twitter-api-v2": "^1.17.0",
+    "snoowrap": "^1.23.0",
+    "telegraf": "^4.16.0",
+    "bullmq": "^5.1.0",
+    "ioredis": "^5.3.0",
+    "@prisma/client": "^5.9.0",
+    "zod": "^3.23.0",
+    "pino": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "prisma": "^5.9.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.2.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "crypto-smallcap-trader",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.18",
+    "tailwindcss": "^4.1.18",
+    "turbo": "^2.0.0",
+    "typescript": "^5.3.0"
+  }
+}
