@@ -249,32 +249,92 @@ with col_actions:
                 format_func=lambda x: f"{SUPPORTED_NETWORKS[x]['icon']} {SUPPORTED_NETWORKS[x]['name']}",
                 key="import_network"
             )
-            import_key = st.text_input("Clé privée (0x...)", type="password", key="import_key")
             
-            if st.button("📥 Importer", type="secondary", use_container_width=True):
-                if import_key:
-                    try:
-                        if not import_key.startswith("0x"):
-                            import_key = "0x" + import_key
-                        
-                        account = Account.from_key(import_key)
-                        
-                        # Vérifier si déjà existant
-                        existing = [w for w in db.get_wallets() if w.address.lower() == account.address.lower()]
-                        if existing:
-                            st.warning(f"⚠️ Ce wallet existe déjà: {existing[0].name}")
-                        else:
-                            wallet_id = db.add_wallet(
-                                name=import_name,
-                                address=account.address,
-                                network=import_network
-                            )
-                            st.success(f"✅ Wallet importé: `{account.address[:12]}...`")
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Clé invalide: {e}")
-                else:
-                    st.warning("⚠️ Entre une clé privée")
+            import_method = st.radio(
+                "Méthode d'import",
+                ["🔑 Clé privée", "📝 Seed Phrase (12/24 mots)"],
+                horizontal=True,
+                key="import_method"
+            )
+            
+            if "Clé privée" in import_method:
+                import_key = st.text_input("Clé privée (0x...)", type="password", key="import_key")
+                
+                if st.button("📥 Importer", type="secondary", use_container_width=True, key="import_pk_btn"):
+                    if import_key:
+                        try:
+                            if not import_key.startswith("0x"):
+                                import_key = "0x" + import_key
+                            
+                            account = Account.from_key(import_key)
+                            
+                            # Vérifier si déjà existant
+                            existing = [w for w in db.get_wallets() if w.address.lower() == account.address.lower()]
+                            if existing:
+                                st.warning(f"⚠️ Ce wallet existe déjà: {existing[0].name}")
+                            else:
+                                wallet_id = db.add_wallet(
+                                    name=import_name,
+                                    address=account.address,
+                                    network=import_network
+                                )
+                                st.success(f"✅ Wallet importé: `{account.address[:12]}...`")
+                                st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Clé invalide: {e}")
+                    else:
+                        st.warning("⚠️ Entre une clé privée")
+            
+            else:  # Seed Phrase
+                import_seed = st.text_area(
+                    "Seed Phrase (12 ou 24 mots séparés par des espaces)",
+                    height=100,
+                    key="import_seed",
+                    help="Exemple: word1 word2 word3 ... word12"
+                )
+                
+                account_index = st.number_input(
+                    "Index du compte (0 = premier compte)",
+                    min_value=0,
+                    max_value=99,
+                    value=0,
+                    key="account_index"
+                )
+                
+                if st.button("📥 Importer depuis Seed", type="secondary", use_container_width=True, key="import_seed_btn"):
+                    if import_seed:
+                        try:
+                            # Nettoyer la seed phrase
+                            seed_clean = ' '.join(import_seed.strip().lower().split())
+                            word_count = len(seed_clean.split())
+                            
+                            if word_count not in [12, 15, 18, 21, 24]:
+                                st.error(f"❌ Seed phrase invalide: {word_count} mots (attendu: 12, 15, 18, 21 ou 24)")
+                            else:
+                                Account.enable_unaudited_hdwallet_features()
+                                
+                                # Dérivation standard Ethereum
+                                derivation_path = f"m/44'/60'/0'/0/{account_index}"
+                                account = Account.from_mnemonic(seed_clean, account_path=derivation_path)
+                                
+                                # Vérifier si déjà existant
+                                existing = [w for w in db.get_wallets() if w.address.lower() == account.address.lower()]
+                                if existing:
+                                    st.warning(f"⚠️ Ce wallet existe déjà: {existing[0].name}")
+                                else:
+                                    wallet_id = db.add_wallet(
+                                        name=import_name,
+                                        address=account.address,
+                                        network=import_network
+                                    )
+                                    st.success(f"✅ Wallet importé depuis seed!")
+                                    st.markdown(f"**Adresse:** `{account.address}`")
+                                    st.markdown(f"**Chemin:** `{derivation_path}`")
+                                    st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Seed invalide: {e}")
+                    else:
+                        st.warning("⚠️ Entre ta seed phrase")
 
 st.markdown("---")
 
