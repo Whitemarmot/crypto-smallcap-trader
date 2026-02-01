@@ -342,37 +342,78 @@ st.markdown("---")
 if active_wallet:
     st.subheader(f"🪙 Holdings - {active_wallet.name}")
     
-    # Données simulées (à remplacer par API calls)
-    holdings_data = {
-        'Token': ['ETH', 'USDC', 'PEPE', 'BONK', 'WIF'],
-        'Balance': ['2.5432', '1,500.00', '50,000,000', '2,500,000', '150'],
-        'Prix ($)': ['$3,245.67', '$1.00', '$0.0000012', '$0.000025', '$2.45'],
-        'Valeur ($)': ['$8,252.32', '$1,500.00', '$60.00', '$62.50', '$367.50'],
-        'Change 24h': ['+2.4%', '0%', '+15.2%', '-8.1%', '+5.6%'],
-    }
+    # Import balance fetcher
+    try:
+        from utils.balance import get_all_balances, get_prices
+        BALANCE_AVAILABLE = True
+    except ImportError:
+        BALANCE_AVAILABLE = False
     
-    df_holdings = pd.DataFrame(holdings_data)
-    
-    # Custom styling for dataframe
-    def style_change(val):
-        if val.startswith('+'):
-            return 'color: #00ff88'
-        elif val.startswith('-'):
-            return 'color: #ff4757'
-        return ''
-    
-    st.dataframe(
-        df_holdings,
-        column_config={
-            "Token": st.column_config.TextColumn("🪙 Token", width="small"),
-            "Balance": st.column_config.TextColumn("📊 Balance"),
-            "Prix ($)": st.column_config.TextColumn("💵 Prix"),
-            "Valeur ($)": st.column_config.TextColumn("💰 Valeur"),
-            "Change 24h": st.column_config.TextColumn("📈 24h"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
+    if BALANCE_AVAILABLE:
+        with st.spinner("🔄 Chargement des soldes depuis la blockchain..."):
+            try:
+                # Fetch real balances
+                balances = get_all_balances(active_wallet.address, active_wallet.network)
+                
+                if balances:
+                    # Get prices
+                    symbols = [b.symbol for b in balances]
+                    prices = get_prices(symbols)
+                    
+                    # Build dataframe
+                    holdings_data = {
+                        'Token': [],
+                        'Balance': [],
+                        'Prix ($)': [],
+                        'Valeur ($)': [],
+                    }
+                    
+                    total_value = 0
+                    for bal in balances:
+                        price = prices.get(bal.symbol, 0)
+                        value = bal.balance * price
+                        total_value += value
+                        
+                        holdings_data['Token'].append(bal.symbol)
+                        holdings_data['Balance'].append(f"{bal.balance:.6f}".rstrip('0').rstrip('.'))
+                        holdings_data['Prix ($)'].append(f"${price:,.4f}" if price > 0 else "N/A")
+                        holdings_data['Valeur ($)'].append(f"${value:,.2f}" if price > 0 else "N/A")
+                    
+                    # Show total
+                    st.metric("💰 Valeur Totale", f"${total_value:,.2f}")
+                    
+                    df_holdings = pd.DataFrame(holdings_data)
+                    
+                    st.dataframe(
+                        df_holdings,
+                        column_config={
+                            "Token": st.column_config.TextColumn("🪙 Token", width="small"),
+                            "Balance": st.column_config.TextColumn("📊 Balance"),
+                            "Prix ($)": st.column_config.TextColumn("💵 Prix"),
+                            "Valeur ($)": st.column_config.TextColumn("💰 Valeur"),
+                        },
+                        hide_index=True,
+                        use_container_width=True
+                    )
+                else:
+                    st.info("📭 Aucun token trouvé sur ce wallet (ou solde = 0)")
+                    st.caption(f"Adresse: `{active_wallet.address}`")
+                    st.caption(f"Réseau: {active_wallet.network}")
+                    
+            except Exception as e:
+                st.error(f"❌ Erreur lors du chargement: {e}")
+                st.caption("Vérifie que l'adresse est correcte et que le réseau est accessible")
+    else:
+        st.warning("⚠️ Module balance non disponible")
+        # Fallback données simulées
+        holdings_data = {
+            'Token': ['ETH'],
+            'Balance': ['0'],
+            'Prix ($)': ['N/A'],
+            'Valeur ($)': ['N/A'],
+        }
+        df_holdings = pd.DataFrame(holdings_data)
+        st.dataframe(df_holdings, hide_index=True, use_container_width=True)
     
     # Graphiques
     col_chart1, col_chart2 = st.columns(2)
