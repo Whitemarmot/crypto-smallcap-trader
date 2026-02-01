@@ -26,7 +26,8 @@ try:
         get_fear_greed_index,
         get_trending_tokens,
         get_tokens_by_market_cap,
-        get_google_trends
+        get_google_trends,
+        get_cryptopanic_sentiment
     )
     from utils.config import load_config
     from analyzer import analyze_token, TradingAction
@@ -68,8 +69,8 @@ def fetch_token_details(coingecko_id: str) -> dict:
         return None
 
 
-def analyze_token_auto(token_data: dict, fg_value: int = 50, trends_data: dict = None) -> dict:
-    """Run AI analysis on a token with fetched data + Google Trends"""
+def analyze_token_auto(token_data: dict, fg_value: int = 50, trends_data: dict = None, cryptopanic_data: dict = None) -> dict:
+    """Run AI analysis on a token with fetched data + Google Trends + CryptoPanic"""
     if not token_data:
         return None
     
@@ -79,16 +80,20 @@ def analyze_token_auto(token_data: dict, fg_value: int = 50, trends_data: dict =
     fg_modifier = (fg_value - 50) / 100
     
     # Google Trends modifier (-0.5 to +0.5)
-    # Score of 50 = neutral, 100 = very bullish, 0 = bearish
     trends_modifier = 0
     if trends_data and symbol in trends_data:
         trends_score = trends_data[symbol]
         trends_modifier = (trends_score - 50) / 100
     
+    # CryptoPanic sentiment modifier (-0.5 to +0.5)
+    cp_modifier = 0
+    if cryptopanic_data and 'sentiment' in cryptopanic_data:
+        cp_modifier = cryptopanic_data['sentiment'] * 0.5  # Already -1 to 1, scale to -0.5 to 0.5
+    
     # Blend token sentiment with global signals
     token_sentiment = token_data.get('sentiment_score', 0)
-    # 50% token sentiment, 30% Fear&Greed, 20% Google Trends
-    final_sentiment = (token_sentiment * 0.5) + (fg_modifier * 0.3) + (trends_modifier * 0.2)
+    # 40% token sentiment, 25% Fear&Greed, 20% Google Trends, 15% CryptoPanic
+    final_sentiment = (token_sentiment * 0.4) + (fg_modifier * 0.25) + (trends_modifier * 0.2) + (cp_modifier * 0.15)
     
     # Prepare data for analyzer
     sentiment_data = {
@@ -215,6 +220,12 @@ if st.button("🚀 Lancer l'analyse automatique", type="primary", use_container_
             if trends_data:
                 st.caption(f"📈 Google Trends: {', '.join([f'{k}={v}' for k,v in trends_data.items()])}")
         
+        # Fetch CryptoPanic global sentiment
+        with st.spinner("📰 Récupération CryptoPanic..."):
+            cryptopanic_data = get_cryptopanic_sentiment()
+            if cryptopanic_data and cryptopanic_data.get('posts', 0) > 0:
+                st.caption(f"📰 CryptoPanic: {cryptopanic_data['posts']} news | Sentiment: {cryptopanic_data['sentiment']:+.2f}")
+        
         # Analyze each token
         results = []
         progress = st.progress(0, text="Analyse en cours...")
@@ -229,7 +240,7 @@ if st.button("🚀 Lancer l'analyse automatique", type="primary", use_container_
                 details = fetch_token_details(token['symbol'].lower())
             
             if details:
-                result = analyze_token_auto(details, fg_value, trends_data)
+                result = analyze_token_auto(details, fg_value, trends_data, cryptopanic_data)
                 if result:
                     results.append(result)
             

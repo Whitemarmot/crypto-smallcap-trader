@@ -64,53 +64,86 @@ def get_trend_score(symbol: str) -> Optional[int]:
     return trends.get(symbol.upper())
 
 
-# ==================== CRYPTOPANIC (optional) ====================
+# ==================== CRYPTOPANIC (via NordVPN proxy) ====================
 
-def get_cryptopanic_sentiment(symbol: str = None) -> Dict[str, Any]:
+NORDVPN_USER = os.getenv('NORDVPN_USER')
+NORDVPN_PASS = os.getenv('NORDVPN_PASS')
+
+def get_proxy():
+    """Get NordVPN SOCKS5 proxy config if available"""
+    if NORDVPN_USER and NORDVPN_PASS:
+        proxy = f'socks5h://{NORDVPN_USER}:{NORDVPN_PASS}@nl.socks.nordhold.net:1080'
+        return {'http': proxy, 'https': proxy}
+    return None
+
+
+def get_cryptopanic_posts(symbol: str = None, filter_type: str = 'hot') -> List[Dict]:
     """
-    Get news sentiment from CryptoPanic.
-    Requires free API key from https://cryptopanic.com/developers/api/
+    Get news posts from CryptoPanic.
+    Uses NordVPN proxy to bypass VPS blocking.
     """
     if not CRYPTOPANIC_API_KEY:
-        return {'error': 'No CryptoPanic API key configured'}
+        return []
     
     try:
         params = {
             'auth_token': CRYPTOPANIC_API_KEY,
             'public': 'true',
-            'filter': 'hot'
+            'filter': filter_type  # hot, rising, bullish, bearish, important
         }
         if symbol:
             params['currencies'] = symbol.upper()
         
+        proxies = get_proxy()
+        
         resp = requests.get(
-            'https://cryptopanic.com/api/v1/posts/',
+            'https://cryptopanic.com/api/developer/v2/posts/',
             params=params,
-            timeout=10
+            proxies=proxies,
+            timeout=15
         )
         resp.raise_for_status()
-        data = resp.json()
-        
-        posts = data.get('results', [])
-        if not posts:
-            return {'sentiment': 0, 'posts': 0}
-        
-        # Calculate sentiment from votes
-        bullish = sum(1 for p in posts if p.get('votes', {}).get('positive', 0) > p.get('votes', {}).get('negative', 0))
-        bearish = sum(1 for p in posts if p.get('votes', {}).get('negative', 0) > p.get('votes', {}).get('positive', 0))
-        
-        total = bullish + bearish
-        sentiment = (bullish - bearish) / total if total > 0 else 0
-        
-        return {
-            'sentiment': sentiment,  # -1 to 1
-            'posts': len(posts),
-            'bullish': bullish,
-            'bearish': bearish
-        }
+        return resp.json().get('results', [])
         
     except Exception as e:
-        return {'error': str(e)}
+        print(f"CryptoPanic error: {e}")
+        return []
+
+
+def get_cryptopanic_sentiment(symbol: str = None) -> Dict[str, Any]:
+    """
+    Get news sentiment from CryptoPanic.
+    Analyzes votes on recent posts to determine sentiment.
+    """
+    posts = get_cryptopanic_posts(symbol)
+    
+    if not posts:
+        return {'sentiment': 0, 'posts': 0, 'error': 'No posts found'}
+    
+    # Calculate sentiment from votes
+    bullish = 0
+    bearish = 0
+    
+    for p in posts:
+        votes = p.get('votes', {})
+        pos = votes.get('positive', 0)
+        neg = votes.get('negative', 0)
+        
+        if pos > neg:
+            bullish += 1
+        elif neg > pos:
+            bearish += 1
+    
+    total = bullish + bearish
+    sentiment = (bullish - bearish) / total if total > 0 else 0
+    
+    return {
+        'sentiment': sentiment,  # -1 to 1
+        'posts': len(posts),
+        'bullish': bullish,
+        'bearish': bearish,
+        'titles': [p.get('title', '')[:60] for p in posts[:5]]
+    }
 
 
 def rate_limit(endpoint: str):
