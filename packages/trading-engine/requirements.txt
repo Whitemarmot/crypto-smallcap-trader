@@ -1,0 +1,6 @@
+# Trading Engine EVM - Python Dependencies
+web3>=6.15.0
+httpx>=0.27.0
+pydantic>=2.5.0
+python-dotenv>=1.0.0
+eth-account>=0.11.0
