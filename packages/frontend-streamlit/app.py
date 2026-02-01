@@ -1,5 +1,5 @@
 """
-Crypto SmallCap Trader - Dashboard Principal
+Crypto SmallCap Trader - Home / Landing Page
 Frontend Streamlit pour le monitoring et contrôle du bot de trading
 """
 
@@ -9,6 +9,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import random
+import sys
+import os
+
+# Add utils to path
+sys.path.insert(0, os.path.dirname(__file__))
 
 # Configuration de la page
 st.set_page_config(
@@ -242,4 +247,33 @@ with action_cols[3]:
 
 with action_cols[4]:
     if st.button("⚙️ Settings", use_container_width=True):
+        st.switch_page("pages/5_settings.py")
+
+# Footer with navigation
+st.markdown("---")
+st.markdown("### 📍 Navigation Rapide")
+nav_cols = st.columns(6)
+
+with nav_cols[0]:
+    if st.button("🏠 Dashboard", use_container_width=True, type="primary"):
+        st.switch_page("pages/0_dashboard.py")
+        
+with nav_cols[1]:
+    if st.button("👛 Wallets", use_container_width=True):
         st.switch_page("pages/1_wallet.py")
+
+with nav_cols[2]:
+    if st.button("📈 Trades", use_container_width=True):
+        st.switch_page("pages/2_trades.py")
+
+with nav_cols[3]:
+    if st.button("📡 Signaux", use_container_width=True):
+        st.switch_page("pages/3_signals.py")
+
+with nav_cols[4]:
+    if st.button("🎯 Stratégies", use_container_width=True):
+        st.switch_page("pages/4_strategies.py")
+
+with nav_cols[5]:
+    if st.button("⚙️ Paramètres", use_container_width=True):
+        st.switch_page("pages/5_settings.py")

@@ -3,3 +3,5 @@ plotly>=5.18.0
 pandas>=2.1.0
 python-dotenv>=1.0.0
 requests>=2.31.0
+eth-account>=0.10.0
+cryptography>=41.0.0

@@ -1,6 +1,6 @@
 """
-Crypto SmallCap Trader - Vue Wallet
-Gestion du portefeuille et des tokens
+👛 Wallet Management - Multi-Wallet avec SQLite
+Liste, création, import, switch de wallets EVM
 """
 
 import streamlit as st
@@ -9,191 +9,407 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import random
+import sys
+import os
+
+# Add utils to path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from utils.database import get_db, WalletRecord
+from utils.config import load_config, save_config, SUPPORTED_NETWORKS
+
+try:
+    from eth_account import Account
+    WALLET_AVAILABLE = True
+except ImportError:
+    WALLET_AVAILABLE = False
 
 st.set_page_config(
-    page_title="💼 Wallet | SmallCap Trader",
-    page_icon="💼",
+    page_title="👛 Wallet | SmallCap Trader",
+    page_icon="👛",
     layout="wide"
 )
 
-st.title("💼 Wallet & Portfolio")
-st.markdown("Gérez votre portefeuille Solana et vos positions")
-
-# Wallet Overview
-st.markdown("---")
-col1, col2, col3 = st.columns(3)
-
-with col1:
-    st.metric(
-        label="💰 Balance Total",
-        value="$12,458.32",
-        delta="+$1,234.56 (10.9%)"
-    )
-    
-with col2:
-    st.metric(
-        label="🔒 Solana (SOL)",
-        value="45.32 SOL",
-        delta="≈ $4,532.00"
-    )
-    
-with col3:
-    st.metric(
-        label="💵 USDC",
-        value="$1,250.00",
-        delta="Stable"
-    )
-
-st.markdown("---")
-
-# Wallet Address & Actions
-st.subheader("🔑 Wallet Principal")
-wallet_col1, wallet_col2 = st.columns([3, 1])
-
-with wallet_col1:
-    wallet_address = "7xKX...9nYz"
-    st.code(f"Adresse: {wallet_address}", language=None)
-    
-with wallet_col2:
-    if st.button("📋 Copier", use_container_width=True):
-        st.toast("Adresse copiée!", icon="✅")
-
-# Token Holdings
-st.markdown("---")
-st.subheader("🪙 Holdings")
-
-holdings_data = {
-    'Token': ['SOL', 'BONK', 'WIF', 'PYTH', 'JUP', 'USDC'],
-    'Balance': ['45.32', '12,500,000', '234.5', '890', '125', '1,250'],
-    'Prix': ['$100.02', '$0.0000234', '$2.68', '$0.42', '$0.89', '$1.00'],
-    'Valeur ($)': ['$4,532.90', '$292.50', '$628.46', '$373.80', '$111.25', '$1,250.00'],
-    'Allocation (%)': [35.2, 4.5, 9.7, 5.8, 1.7, 19.4],
-    '24h Change': ['+2.4%', '+12.5%', '-3.2%', '+5.1%', '+1.8%', '0%'],
-}
-
-df_holdings = pd.DataFrame(holdings_data)
-
-# Style pour les changements positifs/négatifs
-def color_change(val):
-    if '+' in str(val):
-        return 'color: #00ff88'
-    elif '-' in str(val):
-        return 'color: #ff4444'
-    return ''
-
-st.dataframe(
-    df_holdings,
-    column_config={
-        "Token": st.column_config.TextColumn("🪙 Token", width="small"),
-        "Balance": st.column_config.TextColumn("📊 Balance"),
-        "Prix": st.column_config.TextColumn("💵 Prix"),
-        "Valeur ($)": st.column_config.TextColumn("💰 Valeur"),
-        "Allocation (%)": st.column_config.ProgressColumn(
-            "📈 Allocation",
-            format="%.1f%%",
-            min_value=0,
-            max_value=100,
-        ),
-        "24h Change": st.column_config.TextColumn("🔄 24h"),
-    },
-    hide_index=True,
-    use_container_width=True
-)
-
-# Graphique d'allocation
-st.markdown("---")
-col_chart1, col_chart2 = st.columns(2)
-
-with col_chart1:
-    st.subheader("📊 Allocation du Portfolio")
-    fig_alloc = px.pie(
-        df_holdings,
-        values='Allocation (%)',
-        names='Token',
-        color_discrete_sequence=px.colors.sequential.Viridis
-    )
-    fig_alloc.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        height=400
-    )
-    st.plotly_chart(fig_alloc, use_container_width=True)
-
-with col_chart2:
-    st.subheader("📈 Performance par Token (7j)")
-    
-    performance_data = {
-        'Token': ['SOL', 'BONK', 'WIF', 'PYTH', 'JUP'],
-        'Performance (%)': [8.5, 45.2, -12.3, 22.1, 5.6]
+# ========== STYLES ==========
+st.markdown("""
+<style>
+    .wallet-header {
+        font-size: 2rem;
+        font-weight: bold;
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
-    df_perf = pd.DataFrame(performance_data)
-    
-    colors = ['#00ff88' if x > 0 else '#ff4444' for x in df_perf['Performance (%)']]
-    
-    fig_perf = go.Figure(data=[
-        go.Bar(
-            x=df_perf['Token'],
-            y=df_perf['Performance (%)'],
-            marker_color=colors
-        )
-    ])
-    fig_perf.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        yaxis_title="Performance (%)",
-        height=400
-    )
-    st.plotly_chart(fig_perf, use_container_width=True)
+    .active-wallet-card {
+        background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);
+        border-radius: 15px;
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+        color: white;
+    }
+    .wallet-list-item {
+        background: linear-gradient(135deg, #2d2d44 0%, #1e1e2e 100%);
+        border-radius: 12px;
+        padding: 1rem;
+        margin-bottom: 0.5rem;
+        border: 1px solid #404060;
+    }
+    .wallet-list-item:hover {
+        border-color: #667eea;
+    }
+    .balance-big {
+        font-size: 2rem;
+        font-weight: bold;
+    }
+    .network-tag {
+        padding: 4px 10px;
+        border-radius: 15px;
+        font-size: 0.75rem;
+        background: rgba(102, 126, 234, 0.3);
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Actions de wallet
+# ========== DATABASE ==========
+db = get_db()
+config = load_config()
+
+# ========== HEADER ==========
+st.markdown('<p class="wallet-header">👛 Gestion des Wallets</p>', unsafe_allow_html=True)
+st.caption("Gérez vos wallets EVM multi-réseaux")
+
+st.markdown("---")
+
+# ========== WALLET ACTIF ==========
+active_wallet = db.get_active_wallet()
+
+if active_wallet:
+    st.subheader("🟢 Wallet Actif")
+    
+    col_active1, col_active2, col_active3 = st.columns([2, 1, 1])
+    
+    with col_active1:
+        network_icon = SUPPORTED_NETWORKS.get(active_wallet.network, {}).get('icon', '🔗')
+        st.markdown(f"""
+        <div class="active-wallet-card">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin:0; color:white;">✨ {active_wallet.name}</h3>
+                <span class="network-tag">{network_icon} {active_wallet.network.upper()}</span>
+            </div>
+            <div style="font-family: monospace; margin: 15px 0; font-size: 0.9rem; opacity: 0.9;">
+                {active_wallet.address}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col_active2:
+        # Simulation balance (à remplacer par vraies données)
+        balance_eth = random.uniform(0.5, 5)
+        balance_usd = balance_eth * 3200
+        st.metric("💰 Balance", f"{balance_eth:.4f} ETH", f"≈ ${balance_usd:,.2f}")
+    
+    with col_active3:
+        pnl = random.uniform(-10, 25)
+        st.metric("📊 P&L 24h", f"{pnl:+.2f}%", delta_color="normal" if pnl >= 0 else "inverse")
+else:
+    st.warning("⚠️ Aucun wallet actif. Créez ou importez un wallet ci-dessous.")
+
+st.markdown("---")
+
+# ========== LISTE DES WALLETS ==========
+col_list, col_actions = st.columns([2, 1])
+
+with col_list:
+    st.subheader("📋 Tous les Wallets")
+    
+    wallets = db.get_wallets()
+    
+    if wallets:
+        for wallet in wallets:
+            network_info = SUPPORTED_NETWORKS.get(wallet.network, {})
+            network_icon = network_info.get('icon', '🔗')
+            network_name = network_info.get('name', wallet.network)
+            
+            # Simulation des balances
+            balance = random.uniform(100, 5000)
+            pnl_24h = random.uniform(-15, 20)
+            
+            with st.container():
+                col_w1, col_w2, col_w3, col_w4 = st.columns([3, 2, 2, 1])
+                
+                with col_w1:
+                    status = "🟢" if wallet.is_active else "⚪"
+                    st.markdown(f"**{status} {wallet.name}**")
+                    st.caption(f"`{wallet.address[:12]}...{wallet.address[-8:]}`")
+                
+                with col_w2:
+                    st.markdown(f"{network_icon} **{wallet.network.upper()}**")
+                    st.caption(f"${balance:,.2f}")
+                
+                with col_w3:
+                    color = "🟢" if pnl_24h >= 0 else "🔴"
+                    st.markdown(f"{color} **{pnl_24h:+.2f}%**")
+                    st.caption(f"Créé: {wallet.created_at.strftime('%d/%m/%y')}")
+                
+                with col_w4:
+                    # Boutons d'action
+                    if not wallet.is_active:
+                        if st.button("✅", key=f"activate_{wallet.id}", help="Activer ce wallet"):
+                            db.set_active_wallet(wallet.id)
+                            st.success(f"✅ {wallet.name} est maintenant actif!")
+                            st.rerun()
+                    
+                    if st.button("🗑️", key=f"delete_{wallet.id}", help="Supprimer"):
+                        db.delete_wallet(wallet.id)
+                        st.toast(f"Wallet {wallet.name} supprimé", icon="🗑️")
+                        st.rerun()
+                
+                st.markdown("---")
+    else:
+        st.info("📭 Aucun wallet enregistré. Créez votre premier wallet!")
+
+with col_actions:
+    # ========== CRÉER NOUVEAU WALLET ==========
+    st.subheader("➕ Nouveau Wallet")
+    
+    if not WALLET_AVAILABLE:
+        st.error("⚠️ `eth-account` non installé")
+        st.code("pip install eth-account", language="bash")
+    else:
+        with st.expander("🎰 Générer un Wallet", expanded=True):
+            new_wallet_name = st.text_input("Nom du wallet", value="Mon Wallet", key="new_name")
+            new_wallet_network = st.selectbox(
+                "Réseau",
+                options=list(SUPPORTED_NETWORKS.keys()),
+                format_func=lambda x: f"{SUPPORTED_NETWORKS[x]['icon']} {SUPPORTED_NETWORKS[x]['name']}"
+            )
+            
+            wallet_type = st.radio(
+                "Type",
+                ["Simple", "Avec Seed Phrase (BIP-39)"],
+                horizontal=True
+            )
+            
+            use_password = st.checkbox("🔐 Chiffrer la clé privée", value=True)
+            
+            if use_password:
+                password = st.text_input("Mot de passe", type="password", key="gen_pwd")
+            else:
+                password = None
+            
+            if st.button("🎰 Générer", type="primary", use_container_width=True):
+                try:
+                    Account.enable_unaudited_hdwallet_features()
+                    
+                    if "Seed" in wallet_type:
+                        account, mnemonic = Account.create_with_mnemonic()
+                        st.success("✅ Wallet généré avec seed phrase!")
+                        
+                        st.markdown("### 📝 Seed Phrase (12 mots)")
+                        st.warning("⚠️ **SAUVEGARDE CES MOTS** - Ils permettent de récupérer ton wallet!")
+                        st.code(mnemonic, language=None)
+                    else:
+                        account = Account.create()
+                        st.success("✅ Wallet généré!")
+                    
+                    st.markdown("### 📍 Adresse")
+                    st.code(account.address, language=None)
+                    
+                    st.markdown("### 🔑 Clé Privée")
+                    st.code(f"0x{account.key.hex()}", language=None)
+                    
+                    # Sauvegarder dans la DB
+                    encrypted_key = None
+                    if password:
+                        from utils.database import WalletEncryption
+                        # Note: dans la vraie app, on utiliserait le module wallet pour chiffrer
+                        pass
+                    
+                    wallet_id = db.add_wallet(
+                        name=new_wallet_name,
+                        address=account.address,
+                        network=new_wallet_network,
+                        encrypted_key=encrypted_key
+                    )
+                    
+                    # Activer si premier wallet
+                    if len(db.get_wallets()) == 1:
+                        db.set_active_wallet(wallet_id)
+                    
+                    st.error("⚠️ **SAUVEGARDE TA CLÉ PRIVÉE** - Elle ne sera plus affichée!")
+                    
+                except Exception as e:
+                    st.error(f"❌ Erreur: {e}")
+        
+        # ========== IMPORT WALLET ==========
+        with st.expander("📥 Importer un Wallet"):
+            import_name = st.text_input("Nom", value="Wallet Importé", key="import_name")
+            import_network = st.selectbox(
+                "Réseau",
+                options=list(SUPPORTED_NETWORKS.keys()),
+                format_func=lambda x: f"{SUPPORTED_NETWORKS[x]['icon']} {SUPPORTED_NETWORKS[x]['name']}",
+                key="import_network"
+            )
+            import_key = st.text_input("Clé privée (0x...)", type="password", key="import_key")
+            
+            if st.button("📥 Importer", type="secondary", use_container_width=True):
+                if import_key:
+                    try:
+                        if not import_key.startswith("0x"):
+                            import_key = "0x" + import_key
+                        
+                        account = Account.from_key(import_key)
+                        
+                        # Vérifier si déjà existant
+                        existing = [w for w in db.get_wallets() if w.address.lower() == account.address.lower()]
+                        if existing:
+                            st.warning(f"⚠️ Ce wallet existe déjà: {existing[0].name}")
+                        else:
+                            wallet_id = db.add_wallet(
+                                name=import_name,
+                                address=account.address,
+                                network=import_network
+                            )
+                            st.success(f"✅ Wallet importé: `{account.address[:12]}...`")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Clé invalide: {e}")
+                else:
+                    st.warning("⚠️ Entre une clé privée")
+
+st.markdown("---")
+
+# ========== BALANCES DU WALLET ACTIF ==========
+if active_wallet:
+    st.subheader(f"🪙 Holdings - {active_wallet.name}")
+    
+    # Données simulées (à remplacer par API calls)
+    holdings_data = {
+        'Token': ['ETH', 'USDC', 'PEPE', 'BONK', 'WIF'],
+        'Balance': ['2.5432', '1,500.00', '50,000,000', '2,500,000', '150'],
+        'Prix ($)': ['$3,245.67', '$1.00', '$0.0000012', '$0.000025', '$2.45'],
+        'Valeur ($)': ['$8,252.32', '$1,500.00', '$60.00', '$62.50', '$367.50'],
+        'Change 24h': ['+2.4%', '0%', '+15.2%', '-8.1%', '+5.6%'],
+    }
+    
+    df_holdings = pd.DataFrame(holdings_data)
+    
+    # Custom styling for dataframe
+    def style_change(val):
+        if val.startswith('+'):
+            return 'color: #00ff88'
+        elif val.startswith('-'):
+            return 'color: #ff4757'
+        return ''
+    
+    st.dataframe(
+        df_holdings,
+        column_config={
+            "Token": st.column_config.TextColumn("🪙 Token", width="small"),
+            "Balance": st.column_config.TextColumn("📊 Balance"),
+            "Prix ($)": st.column_config.TextColumn("💵 Prix"),
+            "Valeur ($)": st.column_config.TextColumn("💰 Valeur"),
+            "Change 24h": st.column_config.TextColumn("📈 24h"),
+        },
+        hide_index=True,
+        use_container_width=True
+    )
+    
+    # Graphiques
+    col_chart1, col_chart2 = st.columns(2)
+    
+    with col_chart1:
+        st.markdown("**📊 Allocation**")
+        alloc_data = pd.DataFrame({
+            'Token': ['ETH', 'USDC', 'PEPE', 'BONK', 'WIF'],
+            'Valeur': [8252, 1500, 60, 63, 368]
+        })
+        
+        fig_pie = px.pie(
+            alloc_data,
+            values='Valeur',
+            names='Token',
+            color_discrete_sequence=['#667eea', '#00b894', '#fdcb6e', '#e17055', '#74b9ff'],
+            hole=0.45
+        )
+        fig_pie.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            height=300,
+            margin=dict(t=0, b=0, l=0, r=0),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+    
+    with col_chart2:
+        st.markdown("**📈 Performance 7j**")
+        
+        perf_data = pd.DataFrame({
+            'Token': ['ETH', 'USDC', 'PEPE', 'BONK', 'WIF'],
+            'Performance': [8.5, 0, 45.2, -12.3, 22.1]
+        })
+        
+        colors = ['#00ff88' if x >= 0 else '#ff4757' for x in perf_data['Performance']]
+        
+        fig_bar = go.Figure(data=[
+            go.Bar(
+                x=perf_data['Token'],
+                y=perf_data['Performance'],
+                marker_color=colors,
+                text=[f"{p:+.1f}%" for p in perf_data['Performance']],
+                textposition='outside'
+            )
+        ])
+        
+        fig_bar.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.3)")
+        
+        fig_bar.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            yaxis_title="% Change",
+            xaxis_title=None,
+            height=300,
+            margin=dict(t=20, b=0)
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+# ========== ACTIONS RAPIDES ==========
 st.markdown("---")
 st.subheader("⚡ Actions")
 
 action_cols = st.columns(4)
 
 with action_cols[0]:
-    with st.expander("📥 Déposer"):
-        deposit_amount = st.number_input("Montant SOL", min_value=0.0, value=1.0, step=0.1)
-        if st.button("Confirmer Dépôt", type="primary", use_container_width=True):
-            st.success(f"Dépôt de {deposit_amount} SOL initié!")
+    with st.expander("📤 Envoyer"):
+        send_token = st.selectbox("Token", ["ETH", "USDC", "PEPE"], key="send_tok")
+        send_amount = st.number_input("Montant", min_value=0.0, value=0.1, key="send_amt")
+        send_to = st.text_input("Adresse destination", key="send_dest")
+        if st.button("📤 Envoyer", type="primary", key="send_btn"):
+            st.info(f"📤 Envoi {send_amount} {send_token}...")
 
 with action_cols[1]:
-    with st.expander("📤 Retirer"):
-        withdraw_amount = st.number_input("Montant à retirer", min_value=0.0, value=0.5, step=0.1)
-        withdraw_address = st.text_input("Adresse destination")
-        if st.button("Confirmer Retrait", type="primary", use_container_width=True):
-            if withdraw_address:
-                st.success(f"Retrait de {withdraw_amount} SOL vers {withdraw_address[:8]}...")
-            else:
-                st.error("Veuillez entrer une adresse")
+    with st.expander("🔄 Swap"):
+        from_tok = st.selectbox("De", ["ETH", "USDC", "PEPE"], key="swap_from")
+        to_tok = st.selectbox("Vers", ["USDC", "ETH", "PEPE"], key="swap_to")
+        swap_amt = st.number_input("Montant", min_value=0.0, value=0.1, key="swap_amt")
+        if st.button("🔄 Swap", type="primary", key="swap_btn"):
+            st.success(f"🔄 Swap {swap_amt} {from_tok} → {to_tok}")
 
 with action_cols[2]:
-    with st.expander("🔄 Swap"):
-        from_token = st.selectbox("De", ["SOL", "USDC", "BONK", "WIF"])
-        to_token = st.selectbox("Vers", ["USDC", "SOL", "BONK", "WIF"])
-        swap_amount = st.number_input("Montant", min_value=0.0, value=1.0, step=0.1)
-        if st.button("Swap", type="primary", use_container_width=True):
-            st.success(f"Swap {swap_amount} {from_token} → {to_token}")
+    with st.expander("📥 Recevoir"):
+        if active_wallet:
+            st.markdown("**Adresse de dépôt:**")
+            st.code(active_wallet.address, language=None)
+            st.info("📋 Copie cette adresse pour recevoir des tokens")
+        else:
+            st.warning("Sélectionne un wallet")
 
 with action_cols[3]:
-    with st.expander("📊 Rebalance"):
-        st.write("Réajuster l'allocation selon la stratégie")
-        target_alloc = st.slider("SOL target (%)", 20, 60, 40)
-        if st.button("Auto-Rebalance", type="primary", use_container_width=True):
-            st.info("Rebalancing en cours...")
-
-# Historique des transactions récentes
-st.markdown("---")
-st.subheader("📜 Transactions Récentes")
-
-tx_data = {
-    'Date': ['2024-01-15 14:32', '2024-01-15 12:15', '2024-01-14 18:45', '2024-01-14 10:22', '2024-01-13 22:10'],
-    'Type': ['🟢 Achat', '🔴 Vente', '🔄 Swap', '🟢 Achat', '📤 Retrait'],
-    'Token': ['BONK', 'WIF', 'SOL → USDC', 'PYTH', 'SOL'],
-    'Montant': ['$250.00', '$180.50', '2 SOL → $198.50', '$150.00', '1.5 SOL'],
-    'Status': ['✅ Confirmé', '✅ Confirmé', '✅ Confirmé', '✅ Confirmé', '✅ Confirmé'],
-    'TX Hash': ['5xY7...kL9m', '8aB2...nP4q', '3cD5...rT7w', '9eF1...uV2x', '2gH4...yZ6a']
-}
-
-df_tx = pd.DataFrame(tx_data)
-st.dataframe(df_tx, hide_index=True, use_container_width=True)
+    with st.expander("🔗 Explorer"):
+        if active_wallet:
+            network_info = SUPPORTED_NETWORKS.get(active_wallet.network, {})
+            explorer = network_info.get('explorer', 'https://etherscan.io')
+            explorer_url = f"{explorer}/address/{active_wallet.address}"
+            st.markdown(f"[🔗 Voir sur l'explorateur]({explorer_url})")
+        else:
+            st.warning("Sélectionne un wallet")
