@@ -301,6 +301,91 @@ with tab_trading:
             help="Approuver automatiquement les tokens avant swap (⚠️ risque de sécurité)"
         )
         config.trading.auto_approve = auto_approve
+    
+    st.markdown("---")
+    
+    # Market Cap Filter
+    st.markdown("### 🎯 Filtre Market Cap")
+    st.caption("Définissez la fourchette de capitalisation pour filtrer les tokens")
+    
+    col_mcap1, col_mcap2 = st.columns(2)
+    
+    with col_mcap1:
+        # Presets
+        preset = st.selectbox(
+            "Preset",
+            options=["custom", "micro_cap", "small_cap", "mid_cap", "large_cap", "any"],
+            format_func=lambda x: {
+                "custom": "🔧 Personnalisé",
+                "micro_cap": "🔬 Micro Cap (< $1M)",
+                "small_cap": "🎯 Small Cap ($1M - $100M)",
+                "mid_cap": "📊 Mid Cap ($100M - $1B)",
+                "large_cap": "🏛️ Large Cap (> $1B)",
+                "any": "🌐 Tous les tokens"
+            }[x],
+            key="mcap_preset"
+        )
+        
+        # Apply preset values
+        if preset == "micro_cap":
+            min_mcap_default, max_mcap_default = 0, 1_000_000
+        elif preset == "small_cap":
+            min_mcap_default, max_mcap_default = 1_000_000, 100_000_000
+        elif preset == "mid_cap":
+            min_mcap_default, max_mcap_default = 100_000_000, 1_000_000_000
+        elif preset == "large_cap":
+            min_mcap_default, max_mcap_default = 1_000_000_000, 0
+        elif preset == "any":
+            min_mcap_default, max_mcap_default = 0, 0
+        else:
+            min_mcap_default = config.trading.min_market_cap
+            max_mcap_default = config.trading.max_market_cap
+    
+    with col_mcap2:
+        max_cap_str = f"${config.trading.max_market_cap:,.0f}" if config.trading.max_market_cap > 0 else "∞ (illimité)"
+        st.info(f"""
+        **Fourchette actuelle:**  
+        Min: ${config.trading.min_market_cap:,.0f}  
+        Max: {max_cap_str}
+        """)
+    
+    if preset == "custom":
+        col_min, col_max = st.columns(2)
+        
+        with col_min:
+            min_market_cap = st.number_input(
+                "Market Cap Minimum ($)",
+                min_value=0.0,
+                max_value=100_000_000_000.0,
+                value=float(config.trading.min_market_cap),
+                step=100_000.0,
+                format="%.0f",
+                help="0 = pas de minimum"
+            )
+            config.trading.min_market_cap = min_market_cap
+        
+        with col_max:
+            max_market_cap = st.number_input(
+                "Market Cap Maximum ($)",
+                min_value=0.0,
+                max_value=100_000_000_000.0,
+                value=float(config.trading.max_market_cap),
+                step=100_000.0,
+                format="%.0f",
+                help="0 = pas de maximum (tous les tokens)"
+            )
+            config.trading.max_market_cap = max_market_cap
+    else:
+        config.trading.min_market_cap = min_mcap_default
+        config.trading.max_market_cap = max_mcap_default
+        
+        # Show selected range
+        if max_mcap_default > 0:
+            st.success(f"✅ Filtre: ${min_mcap_default:,.0f} - ${max_mcap_default:,.0f}")
+        elif min_mcap_default > 0:
+            st.success(f"✅ Filtre: > ${min_mcap_default:,.0f}")
+        else:
+            st.success("✅ Tous les tokens (pas de filtre)")
 
 # ========== TAB UI ==========
 with tab_ui:

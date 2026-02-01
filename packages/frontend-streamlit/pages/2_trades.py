@@ -5,10 +5,12 @@ Suivi et analyse des trades passés
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import random
+import sys
+import os
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from utils.database import get_db
 
 st.set_page_config(
     page_title="📈 Trades | SmallCap Trader",
@@ -16,212 +18,137 @@ st.set_page_config(
     layout="wide"
 )
 
+db = get_db()
+
 st.title("📈 Historique des Trades")
 st.markdown("Analysez vos performances de trading")
 
-# Filtres
+# Fetch real trades
+trades = db.get_trades(limit=100)
+stats = db.get_portfolio_stats()
+
+# Stats
 st.markdown("---")
-filter_cols = st.columns(4)
-
-with filter_cols[0]:
-    date_range = st.date_input(
-        "📅 Période",
-        value=(datetime.now() - timedelta(days=30), datetime.now()),
-        key="date_filter"
-    )
-    
-with filter_cols[1]:
-    token_filter = st.multiselect(
-        "🪙 Tokens",
-        ["Tous", "SOL", "BONK", "WIF", "PYTH", "JUP", "MYRO", "WEN"],
-        default=["Tous"]
-    )
-
-with filter_cols[2]:
-    trade_type = st.selectbox(
-        "📊 Type",
-        ["Tous", "Buy", "Sell", "Win", "Loss"]
-    )
-    
-with filter_cols[3]:
-    sort_by = st.selectbox(
-        "🔃 Trier par",
-        ["Date (récent)", "Date (ancien)", "P&L (haut)", "P&L (bas)", "Taille"]
-    )
-
-# Stats rapides
-st.markdown("---")
-stat_cols = st.columns(5)
+stat_cols = st.columns(4)
 
 with stat_cols[0]:
-    st.metric("📊 Total Trades", "156", "+12 ce mois")
+    st.metric("📊 Total Trades", str(stats['total_trades']))
     
 with stat_cols[1]:
-    st.metric("🎯 Win Rate", "68.5%", "+2.3%")
+    st.metric("📅 Trades (24h)", str(stats['recent_trades_24h']))
     
 with stat_cols[2]:
-    st.metric("💰 P&L Total", "+$2,847.32", "+18.7%")
+    st.metric("🎯 Win Rate", "--", "Pas encore de données")
     
 with stat_cols[3]:
-    st.metric("📈 Meilleur Trade", "+$456.78", "BONK")
-    
-with stat_cols[4]:
-    st.metric("📉 Pire Trade", "-$123.45", "MYRO")
+    st.metric("💰 P&L Total", "--", "Pas encore de données")
 
-# Graphique de performance cumulative
 st.markdown("---")
-st.subheader("📊 Performance Cumulative")
 
-# Génération de données de démo
-dates = pd.date_range(start=datetime.now() - timedelta(days=90), end=datetime.now(), freq='D')
-cumulative_pnl = [0]
-for i in range(1, len(dates)):
-    daily_change = random.uniform(-50, 80)
-    cumulative_pnl.append(cumulative_pnl[-1] + daily_change)
+# Trades list
+st.subheader("📜 Liste des Trades")
 
-df_cumulative = pd.DataFrame({
-    'Date': dates,
-    'P&L Cumulatif ($)': cumulative_pnl
-})
+if trades:
+    # Convert to dataframe
+    trades_data = []
+    for trade in trades:
+        trades_data.append({
+            'Date': trade.get('created_at', 'N/A'),
+            'Type': trade.get('trade_type', 'swap').upper(),
+            'Token In': trade.get('token_in', '?'),
+            'Token Out': trade.get('token_out', '?'),
+            'Amount In': trade.get('amount_in', '0'),
+            'Amount Out': trade.get('amount_out', '0'),
+            'Status': trade.get('status', 'pending'),
+            'TX Hash': trade.get('tx_hash', 'N/A')[:16] + '...' if trade.get('tx_hash') else 'N/A'
+        })
+    
+    df = pd.DataFrame(trades_data)
+    
+    # Style status
+    def style_status(val):
+        colors = {
+            'confirmed': 'background-color: #00ff8822',
+            'pending': 'background-color: #ffaa0022',
+            'failed': 'background-color: #ff000022'
+        }
+        return colors.get(val.lower(), '')
+    
+    st.dataframe(
+        df,
+        column_config={
+            "Date": st.column_config.DatetimeColumn("📅 Date", format="DD/MM/YY HH:mm"),
+            "Type": st.column_config.TextColumn("📊 Type"),
+            "Token In": st.column_config.TextColumn("📥 Token In"),
+            "Token Out": st.column_config.TextColumn("📤 Token Out"),
+            "Amount In": st.column_config.TextColumn("💰 Amount In"),
+            "Amount Out": st.column_config.TextColumn("💰 Amount Out"),
+            "Status": st.column_config.TextColumn("✅ Status"),
+            "TX Hash": st.column_config.TextColumn("🔗 TX"),
+        },
+        hide_index=True,
+        use_container_width=True
+    )
+else:
+    st.info("📭 Aucun trade enregistré")
+    st.markdown("""
+    Les trades apparaîtront ici une fois que :
+    1. ✅ Tu auras configuré un wallet avec des fonds
+    2. ✅ Tu auras créé une stratégie de trading
+    3. ✅ Le bot aura exécuté des trades
+    """)
 
-fig_cumulative = go.Figure()
-fig_cumulative.add_trace(go.Scatter(
-    x=df_cumulative['Date'],
-    y=df_cumulative['P&L Cumulatif ($)'],
-    fill='tonexty',
-    fillcolor='rgba(102, 126, 234, 0.3)',
-    line=dict(color='#667eea', width=2),
-    name='P&L Cumulatif'
-))
-
-fig_cumulative.add_hline(y=0, line_dash="dash", line_color="gray")
-fig_cumulative.update_layout(
-    plot_bgcolor='rgba(0,0,0,0)',
-    paper_bgcolor='rgba(0,0,0,0)',
-    xaxis=dict(showgrid=False),
-    yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)', title="P&L ($)"),
-    height=400
-)
-st.plotly_chart(fig_cumulative, use_container_width=True)
-
-# Stats par token
 st.markdown("---")
-col_stats1, col_stats2 = st.columns(2)
 
-with col_stats1:
-    st.subheader("🪙 Performance par Token")
+# Manual trade form (for testing)
+with st.expander("➕ Enregistrer un Trade Manuel"):
+    st.caption("Pour tests ou trades manuels effectués hors du bot")
     
-    token_perf = {
-        'Token': ['BONK', 'WIF', 'SOL', 'PYTH', 'JUP', 'MYRO'],
-        'Trades': [45, 32, 28, 22, 18, 11],
-        'Win Rate': [72, 68, 75, 64, 61, 45],
-        'P&L ($)': [892.50, 456.30, 678.20, 234.10, 156.80, -89.40]
-    }
-    df_token_perf = pd.DataFrame(token_perf)
+    col1, col2 = st.columns(2)
     
-    fig_token = px.bar(
-        df_token_perf,
-        x='Token',
-        y='P&L ($)',
-        color='P&L ($)',
-        color_continuous_scale=['#ff4444', '#ffaa00', '#00ff88']
-    )
-    fig_token.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        height=350
-    )
-    st.plotly_chart(fig_token, use_container_width=True)
+    with col1:
+        trade_type = st.selectbox("Type", ["buy", "sell", "swap"])
+        token_in = st.text_input("Token In", value="ETH")
+        amount_in = st.text_input("Amount In", value="0.1")
+    
+    with col2:
+        token_out = st.text_input("Token Out", value="USDC")
+        amount_out = st.text_input("Amount Out", value="0")
+        tx_hash = st.text_input("TX Hash (optionnel)")
+    
+    if st.button("💾 Enregistrer", type="primary"):
+        try:
+            db.add_trade(
+                wallet_id=1,  # Default wallet
+                trade_type=trade_type,
+                token_in=token_in,
+                token_out=token_out,
+                amount_in=amount_in,
+                amount_out=amount_out,
+                tx_hash=tx_hash or None,
+                status='confirmed'
+            )
+            st.success("✅ Trade enregistré!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Erreur: {e}")
 
-with col_stats2:
-    st.subheader("📈 Distribution des Trades")
-    
-    trade_dist = {
-        'Résultat': ['Gagnant', 'Perdant', 'Breakeven'],
-        'Count': [107, 42, 7]
-    }
-    df_dist = pd.DataFrame(trade_dist)
-    
-    fig_dist = px.pie(
-        df_dist,
-        values='Count',
-        names='Résultat',
-        color='Résultat',
-        color_discrete_map={'Gagnant': '#00ff88', 'Perdant': '#ff4444', 'Breakeven': '#888888'}
-    )
-    fig_dist.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        height=350
-    )
-    st.plotly_chart(fig_dist, use_container_width=True)
-
-# Tableau des trades
+# Navigation
 st.markdown("---")
-st.subheader("📋 Historique Détaillé")
+nav_cols = st.columns(4)
 
-# Générer des trades de démo
-trades_data = []
-tokens = ['BONK', 'WIF', 'PYTH', 'JUP', 'MYRO', 'WEN', 'SOL']
-for i in range(20):
-    trade_date = datetime.now() - timedelta(days=random.randint(0, 30), hours=random.randint(0, 23))
-    token = random.choice(tokens)
-    entry = round(random.uniform(0.1, 5), 4)
-    exit_price = entry * (1 + random.uniform(-0.15, 0.25))
-    size = random.randint(100, 1000)
-    pnl_pct = ((exit_price - entry) / entry) * 100
-    pnl_usd = size * (pnl_pct / 100)
-    
-    trades_data.append({
-        'Date': trade_date.strftime('%Y-%m-%d %H:%M'),
-        'Token': token,
-        'Type': '🟢 Long' if random.random() > 0.3 else '🔴 Short',
-        'Entry': f"${entry:.4f}",
-        'Exit': f"${exit_price:.4f}",
-        'Taille ($)': f"${size}",
-        'P&L (%)': f"{pnl_pct:+.2f}%",
-        'P&L ($)': f"${pnl_usd:+.2f}",
-        'Signal': random.choice(['AI Model', 'Twitter KOL', 'Volume', 'Sentiment']),
-        'Durée': f"{random.randint(1, 48)}h"
-    })
+with nav_cols[0]:
+    if st.button("🏠 Dashboard", use_container_width=True):
+        st.switch_page("pages/0_dashboard.py")
 
-df_trades = pd.DataFrame(trades_data)
+with nav_cols[1]:
+    if st.button("👛 Wallets", use_container_width=True):
+        st.switch_page("pages/1_wallet.py")
 
-# Colorer le P&L
-st.dataframe(
-    df_trades,
-    column_config={
-        "Date": st.column_config.TextColumn("📅 Date", width="medium"),
-        "Token": st.column_config.TextColumn("🪙 Token", width="small"),
-        "Type": st.column_config.TextColumn("📊 Type", width="small"),
-        "Entry": st.column_config.TextColumn("📥 Entry"),
-        "Exit": st.column_config.TextColumn("📤 Exit"),
-        "Taille ($)": st.column_config.TextColumn("💰 Taille"),
-        "P&L (%)": st.column_config.TextColumn("📈 P&L %"),
-        "P&L ($)": st.column_config.TextColumn("💵 P&L $"),
-        "Signal": st.column_config.TextColumn("📡 Signal"),
-        "Durée": st.column_config.TextColumn("⏱️ Durée", width="small"),
-    },
-    hide_index=True,
-    use_container_width=True
-)
+with nav_cols[2]:
+    if st.button("📡 Signaux", use_container_width=True):
+        st.switch_page("pages/3_signals.py")
 
-# Export
-st.markdown("---")
-export_cols = st.columns(4)
-
-with export_cols[0]:
-    if st.button("📥 Export CSV", use_container_width=True):
-        st.toast("Export CSV généré!", icon="✅")
-        
-with export_cols[1]:
-    if st.button("📊 Export PDF Report", use_container_width=True):
-        st.toast("Rapport PDF généré!", icon="✅")
-        
-with export_cols[2]:
-    if st.button("📈 Analyse Avancée", use_container_width=True):
-        st.info("Ouverture de l'analyse avancée...")
-        
-with export_cols[3]:
-    if st.button("🔄 Rafraîchir", use_container_width=True):
-        st.rerun()
+with nav_cols[3]:
+    if st.button("🎯 Stratégies", use_container_width=True):
+        st.switch_page("pages/4_strategies.py")

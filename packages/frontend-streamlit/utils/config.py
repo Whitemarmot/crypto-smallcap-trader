@@ -40,6 +40,10 @@ class TradingSettings:
     min_trade_usd: float = 10.0
     max_trade_usd: float = 10000.0
     auto_approve: bool = False
+    # Market cap filters (in USD)
+    min_market_cap: float = 0.0  # 0 = no minimum
+    max_market_cap: float = 0.0  # 0 = no maximum (any cap)
+    # Preset: small_cap = 1M-100M, micro_cap = 0-1M, mid_cap = 100M-1B
 
 
 @dataclass

@@ -4,16 +4,15 @@ Frontend Streamlit pour le monitoring et contrôle du bot de trading
 """
 
 import streamlit as st
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-import random
+from datetime import datetime
 import sys
 import os
 
 # Add utils to path
 sys.path.insert(0, os.path.dirname(__file__))
+
+from utils.database import get_db
+from utils.config import SUPPORTED_NETWORKS
 
 # Configuration de la page
 st.set_page_config(
@@ -34,12 +33,6 @@ st.markdown("""
         -webkit-text-fill-color: transparent;
         margin-bottom: 1rem;
     }
-    .metric-card {
-        background: linear-gradient(135deg, #1e1e2e 0%, #2d2d44 100%);
-        border-radius: 10px;
-        padding: 1rem;
-        border: 1px solid #404060;
-    }
     .status-active {
         color: #00ff88;
         font-weight: bold;
@@ -51,6 +44,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Database
+db = get_db()
+
 # Sidebar
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/rocket.png", width=80)
@@ -58,11 +54,11 @@ with st.sidebar:
     st.markdown("---")
     
     # Status du bot
-    bot_status = st.toggle("🤖 Bot Trading", value=True)
+    bot_status = st.toggle("🤖 Bot Trading", value=False)
     if bot_status:
         st.success("✅ Bot actif")
     else:
-        st.error("⛔ Bot inactif")
+        st.info("⏸️ Bot en pause")
     
     st.markdown("---")
     
@@ -77,203 +73,141 @@ with st.sidebar:
     max_position = st.slider("Taille max position ($)", 100, 5000, 500, 100)
     
     st.markdown("---")
-    st.caption("v0.1.0 | Dernière MAJ: " + datetime.now().strftime("%H:%M:%S"))
+    st.caption("v0.1.0 | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
 
 # Header principal
-st.markdown('<p class="main-header">🚀 Crypto SmallCap Trader Dashboard</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">🚀 Crypto SmallCap Trader</p>', unsafe_allow_html=True)
 
-# Métriques principales (row 1)
+# Fetch real wallet data
+wallets = db.get_wallets()
+active_wallet = db.get_active_wallet()
+
+# Try to get real balances
+total_value = 0
+if active_wallet:
+    try:
+        from utils.balance import get_all_balances, get_prices
+        balances = get_all_balances(active_wallet.address, active_wallet.network)
+        if balances:
+            symbols = [b.symbol for b in balances]
+            prices = get_prices(symbols)
+            for b in balances:
+                total_value += b.balance * prices.get(b.symbol, 0)
+    except Exception:
+        pass
+
+# Métriques principales
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
     st.metric(
         label="💰 Valeur Portfolio",
-        value="$12,458.32",
-        delta="+$847.21 (7.3%)",
-        delta_color="normal"
+        value=f"${total_value:,.2f}",
+        delta=None
     )
 
 with col2:
     st.metric(
-        label="📈 P&L Aujourd'hui",
-        value="+$234.56",
-        delta="+1.92%",
-        delta_color="normal"
+        label="👛 Wallets",
+        value=str(len(wallets)),
+        delta="actifs" if wallets else None
     )
 
 with col3:
     st.metric(
         label="🔄 Trades Actifs",
-        value="3",
-        delta="2 en profit",
-        delta_color="normal"
+        value="0",
+        delta="En attente"
     )
 
 with col4:
     st.metric(
-        label="🎯 Win Rate (7j)",
-        value="68.5%",
-        delta="+2.1%",
-        delta_color="normal"
+        label="🎯 Win Rate",
+        value="--",
+        delta="Pas encore de trades"
     )
 
 st.markdown("---")
 
-# Graphiques (row 2)
+# Status Section
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.subheader("📊 Performance du Portfolio")
+    st.subheader("📊 Status")
     
-    # Génération de données de démo
-    dates = pd.date_range(start=datetime.now() - timedelta(days=30), end=datetime.now(), freq='D')
-    base_value = 10000
-    values = [base_value]
-    for i in range(1, len(dates)):
-        change = random.uniform(-0.03, 0.04)
-        values.append(values[-1] * (1 + change))
+    if active_wallet:
+        network_icon = SUPPORTED_NETWORKS.get(active_wallet.network, {}).get('icon', '🔗')
+        st.success(f"✅ Wallet actif: **{active_wallet.name}** ({network_icon} {active_wallet.network.upper()})")
+        st.code(active_wallet.address, language=None)
+        
+        if total_value > 0:
+            st.info(f"💰 Balance totale: **${total_value:,.2f}**")
+        else:
+            st.warning("⚠️ Wallet vide - Dépose des tokens pour commencer")
+    else:
+        st.warning("⚠️ Aucun wallet configuré")
+        st.caption("Va dans 👛 Wallets pour créer ou importer un wallet")
     
-    df_portfolio = pd.DataFrame({
-        'Date': dates,
-        'Valeur ($)': values
-    })
-    
-    fig = px.area(
-        df_portfolio, 
-        x='Date', 
-        y='Valeur ($)',
-        color_discrete_sequence=['#667eea']
-    )
-    fig.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        xaxis=dict(showgrid=False),
-        yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
-        height=350
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    # Bot status
+    st.markdown("---")
+    st.subheader("🤖 Trading Bot")
+    st.info("⏸️ Le bot de trading n'est pas encore actif. Configure tes stratégies dans l'onglet Stratégies.")
 
 with col_right:
-    st.subheader("🪙 Allocation")
+    st.subheader("🚀 Démarrage Rapide")
     
-    allocation_data = {
-        'Token': ['SOL', 'BONK', 'WIF', 'PYTH', 'JUP', 'USDC'],
-        'Allocation': [35, 20, 15, 12, 8, 10]
-    }
-    df_alloc = pd.DataFrame(allocation_data)
-    
-    fig_pie = px.pie(
-        df_alloc,
-        values='Allocation',
-        names='Token',
-        color_discrete_sequence=px.colors.sequential.Plasma
-    )
-    fig_pie.update_layout(
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        height=350,
-        showlegend=True
-    )
-    st.plotly_chart(fig_pie, use_container_width=True)
-
-# Positions actives et signaux récents (row 3)
-col_positions, col_signals = st.columns(2)
-
-with col_positions:
-    st.subheader("📍 Positions Actives")
-    
-    positions_data = {
-        'Token': ['BONK', 'WIF', 'PYTH'],
-        'Entry': ['$0.0000234', '$2.45', '$0.42'],
-        'Actuel': ['$0.0000256', '$2.68', '$0.39'],
-        'P&L': ['+9.4%', '+9.3%', '-7.1%'],
-        'Taille': ['$450', '$380', '$290']
-    }
-    df_positions = pd.DataFrame(positions_data)
-    
-    st.dataframe(
-        df_positions,
-        column_config={
-            "Token": st.column_config.TextColumn("🪙 Token"),
-            "Entry": st.column_config.TextColumn("📥 Entry"),
-            "Actuel": st.column_config.TextColumn("💵 Prix"),
-            "P&L": st.column_config.TextColumn("📊 P&L"),
-            "Taille": st.column_config.TextColumn("💰 Taille"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-
-with col_signals:
-    st.subheader("📡 Signaux Récents")
-    
-    signals = [
-        {"time": "14:32", "type": "🟢 BUY", "token": "JUP", "source": "Twitter KOL", "strength": "Strong"},
-        {"time": "13:15", "type": "🟡 HOLD", "token": "BONK", "source": "Sentiment", "strength": "Medium"},
-        {"time": "12:48", "type": "🔴 SELL", "token": "MYRO", "source": "AI Model", "strength": "Strong"},
-        {"time": "11:22", "type": "🟢 BUY", "token": "WEN", "source": "Volume Spike", "strength": "Medium"},
+    steps = [
+        ("👛 Créer un wallet", len(wallets) > 0),
+        ("💰 Déposer des fonds", total_value > 0),
+        ("📊 Configurer stratégie", False),
+        ("🤖 Lancer le bot", False),
     ]
     
-    for signal in signals:
-        with st.container():
-            cols = st.columns([1, 1, 2, 2, 1])
-            cols[0].write(signal["time"])
-            cols[1].write(signal["type"])
-            cols[2].write(f"**{signal['token']}**")
-            cols[3].write(signal["source"])
-            cols[4].write(f"_{signal['strength']}_")
+    for step, done in steps:
+        if done:
+            st.markdown(f"✅ ~~{step}~~")
+        else:
+            st.markdown(f"⬜ {step}")
 
 st.markdown("---")
 
-# Footer avec actions rapides
-st.subheader("⚡ Actions Rapides")
-action_cols = st.columns(5)
-
-with action_cols[0]:
-    if st.button("🔄 Refresh Data", use_container_width=True):
-        st.rerun()
-
-with action_cols[1]:
-    if st.button("📊 Export Report", use_container_width=True):
-        st.toast("Report exporté!", icon="✅")
-
-with action_cols[2]:
-    if st.button("🛑 Pause Trading", use_container_width=True):
-        st.warning("Trading pausé")
-
-with action_cols[3]:
-    if st.button("💰 Withdraw", use_container_width=True):
-        st.info("Ouvrir modal de retrait...")
-
-with action_cols[4]:
-    if st.button("⚙️ Settings", use_container_width=True):
-        st.switch_page("pages/5_settings.py")
-
-# Footer with navigation
-st.markdown("---")
-st.markdown("### 📍 Navigation Rapide")
-nav_cols = st.columns(6)
+# Navigation
+st.subheader("📍 Navigation")
+nav_cols = st.columns(4)
 
 with nav_cols[0]:
-    if st.button("🏠 Dashboard", use_container_width=True, type="primary"):
-        st.switch_page("pages/0_dashboard.py")
-        
-with nav_cols[1]:
-    if st.button("👛 Wallets", use_container_width=True):
+    if st.button("👛 Wallets", use_container_width=True, type="primary"):
         st.switch_page("pages/1_wallet.py")
 
-with nav_cols[2]:
+with nav_cols[1]:
     if st.button("📈 Trades", use_container_width=True):
         st.switch_page("pages/2_trades.py")
 
-with nav_cols[3]:
+with nav_cols[2]:
     if st.button("📡 Signaux", use_container_width=True):
         st.switch_page("pages/3_signals.py")
 
-with nav_cols[4]:
+with nav_cols[3]:
     if st.button("🎯 Stratégies", use_container_width=True):
         st.switch_page("pages/4_strategies.py")
 
-with nav_cols[5]:
-    if st.button("⚙️ Paramètres", use_container_width=True):
+nav_cols2 = st.columns(4)
+
+with nav_cols2[0]:
+    if st.button("🐋 Whales", use_container_width=True, type="secondary"):
+        st.switch_page("pages/7_whales.py")
+
+with nav_cols2[1]:
+    if st.button("🤖 AI", use_container_width=True):
+        st.switch_page("pages/6_ai_analysis.py")
+
+with nav_cols2[2]:
+    if st.button("⚙️ Params", use_container_width=True):
         st.switch_page("pages/5_settings.py")
+
+with nav_cols2[3]:
+    pass  # Empty for balance
+
+# Footer
+st.markdown("---")
+st.caption("SmallCap Trader v0.1.0 - Trading bot basé sur le sentiment social 📱")

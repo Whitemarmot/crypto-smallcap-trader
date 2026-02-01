@@ -85,7 +85,18 @@ active_wallet = db.get_active_wallet()
 if active_wallet:
     st.subheader("🟢 Wallet Actif")
     
-    col_active1, col_active2, col_active3 = st.columns([2, 1, 1])
+    # Fetch real balance for active wallet
+    try:
+        from utils.balance import get_native_balance, get_prices_for_balances
+        native_bal = get_native_balance(active_wallet.address, active_wallet.network)
+        prices = get_prices_for_balances([native_bal])
+        native_price = prices.get(native_bal.symbol, 0)
+        native_usd = native_bal.balance * native_price
+    except Exception:
+        native_bal = None
+        native_usd = 0
+    
+    col_active1, col_active2 = st.columns([2, 1])
     
     with col_active1:
         network_icon = SUPPORTED_NETWORKS.get(active_wallet.network, {}).get('icon', '🔗')
@@ -102,14 +113,10 @@ if active_wallet:
         """, unsafe_allow_html=True)
     
     with col_active2:
-        # Simulation balance (à remplacer par vraies données)
-        balance_eth = random.uniform(0.5, 5)
-        balance_usd = balance_eth * 3200
-        st.metric("💰 Balance", f"{balance_eth:.4f} ETH", f"≈ ${balance_usd:,.2f}")
-    
-    with col_active3:
-        pnl = random.uniform(-10, 25)
-        st.metric("📊 P&L 24h", f"{pnl:+.2f}%", delta_color="normal" if pnl >= 0 else "inverse")
+        if native_bal:
+            st.metric("💰 Balance Native", f"{native_bal.balance:.6f} {native_bal.symbol}", f"≈ ${native_usd:,.2f}")
+        else:
+            st.metric("💰 Balance Native", "0", "Erreur de chargement")
 else:
     st.warning("⚠️ Aucun wallet actif. Créez ou importez un wallet ci-dessous.")
 
@@ -129,9 +136,15 @@ with col_list:
             network_icon = network_info.get('icon', '🔗')
             network_name = network_info.get('name', wallet.network)
             
-            # Simulation des balances
-            balance = random.uniform(100, 5000)
-            pnl_24h = random.uniform(-15, 20)
+            # Fetch real native balance
+            try:
+                from utils.balance import get_native_balance, get_prices_for_balances
+                w_native = get_native_balance(wallet.address, wallet.network)
+                w_prices = get_prices_for_balances([w_native])
+                w_usd = w_native.balance * w_prices.get(w_native.symbol, 0)
+            except Exception:
+                w_native = None
+                w_usd = 0
             
             with st.container():
                 col_w1, col_w2, col_w3, col_w4 = st.columns([3, 2, 2, 1])
@@ -143,11 +156,12 @@ with col_list:
                 
                 with col_w2:
                     st.markdown(f"{network_icon} **{wallet.network.upper()}**")
-                    st.caption(f"${balance:,.2f}")
+                    if w_native:
+                        st.caption(f"{w_native.balance:.6f} {w_native.symbol} (${w_usd:,.2f})")
+                    else:
+                        st.caption("Balance: N/A")
                 
                 with col_w3:
-                    color = "🟢" if pnl_24h >= 0 else "🔴"
-                    st.markdown(f"{color} **{pnl_24h:+.2f}%**")
                     st.caption(f"Créé: {wallet.created_at.strftime('%d/%m/%y')}")
                 
                 with col_w4:
@@ -340,25 +354,33 @@ st.markdown("---")
 
 # ========== BALANCES DU WALLET ACTIF ==========
 if active_wallet:
-    st.subheader(f"🪙 Holdings - {active_wallet.name}")
+    col_title, col_scan = st.columns([3, 1])
+    
+    with col_title:
+        st.subheader(f"🪙 Holdings - {active_wallet.name}")
+    
+    with col_scan:
+        full_scan = st.toggle("🔍 Scan complet", value=False, 
+                              help="Active pour scanner 250+ tokens CoinGecko (plus lent)")
     
     # Import balance fetcher
     try:
-        from utils.balance import get_all_balances, get_prices
+        from utils.balance import get_all_balances, get_prices_for_balances
         BALANCE_AVAILABLE = True
     except ImportError:
         BALANCE_AVAILABLE = False
     
     if BALANCE_AVAILABLE:
-        with st.spinner("🔄 Chargement des soldes depuis la blockchain..."):
+        scan_label = "🔍 Scan complet (250 tokens)..." if full_scan else "🔄 Scan rapide..."
+        with st.spinner(scan_label):
             try:
-                # Fetch real balances
-                balances = get_all_balances(active_wallet.address, active_wallet.network)
+                # Fetch balances (fast or full mode)
+                balances = get_all_balances(active_wallet.address, active_wallet.network, 
+                                           fast_mode=not full_scan)
                 
                 if balances:
-                    # Get prices
-                    symbols = [b.symbol for b in balances]
-                    prices = get_prices(symbols)
+                    # Get prices using the improved function
+                    prices = get_prices_for_balances(balances)
                     
                     # Build dataframe
                     holdings_data = {
@@ -396,83 +418,56 @@ if active_wallet:
                         use_container_width=True
                     )
                 else:
-                    st.info("📭 Aucun token trouvé sur ce wallet (ou solde = 0)")
+                    st.info("📭 Aucun token trouvé sur ce wallet (solde = 0 sur tous les tokens)")
                     st.caption(f"Adresse: `{active_wallet.address}`")
                     st.caption(f"Réseau: {active_wallet.network}")
+                    st.caption("💡 Dépose des tokens pour commencer à trader!")
+                    balances = []  # For chart logic below
                     
             except Exception as e:
                 st.error(f"❌ Erreur lors du chargement: {e}")
                 st.caption("Vérifie que l'adresse est correcte et que le réseau est accessible")
+                balances = []
     else:
         st.warning("⚠️ Module balance non disponible")
-        # Fallback données simulées
-        holdings_data = {
-            'Token': ['ETH'],
-            'Balance': ['0'],
-            'Prix ($)': ['N/A'],
-            'Valeur ($)': ['N/A'],
-        }
-        df_holdings = pd.DataFrame(holdings_data)
-        st.dataframe(df_holdings, hide_index=True, use_container_width=True)
+        balances = []
     
-    # Graphiques
-    col_chart1, col_chart2 = st.columns(2)
-    
-    with col_chart1:
-        st.markdown("**📊 Allocation**")
-        alloc_data = pd.DataFrame({
-            'Token': ['ETH', 'USDC', 'PEPE', 'BONK', 'WIF'],
-            'Valeur': [8252, 1500, 60, 63, 368]
-        })
+    # Graphiques - seulement si on a des balances
+    if balances:
+        col_chart1, col_chart2 = st.columns(2)
         
-        fig_pie = px.pie(
-            alloc_data,
-            values='Valeur',
-            names='Token',
-            color_discrete_sequence=['#667eea', '#00b894', '#fdcb6e', '#e17055', '#74b9ff'],
-            hole=0.45
-        )
-        fig_pie.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            height=300,
-            margin=dict(t=0, b=0, l=0, r=0),
-            showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=-0.2)
-        )
-        st.plotly_chart(fig_pie, use_container_width=True)
-    
-    with col_chart2:
-        st.markdown("**📈 Performance 7j**")
-        
-        perf_data = pd.DataFrame({
-            'Token': ['ETH', 'USDC', 'PEPE', 'BONK', 'WIF'],
-            'Performance': [8.5, 0, 45.2, -12.3, 22.1]
-        })
-        
-        colors = ['#00ff88' if x >= 0 else '#ff4757' for x in perf_data['Performance']]
-        
-        fig_bar = go.Figure(data=[
-            go.Bar(
-                x=perf_data['Token'],
-                y=perf_data['Performance'],
-                marker_color=colors,
-                text=[f"{p:+.1f}%" for p in perf_data['Performance']],
-                textposition='outside'
+        with col_chart1:
+            st.markdown("**📊 Allocation**")
+            # Use real balances for chart
+            alloc_data = pd.DataFrame({
+                'Token': [b.symbol for b in balances],
+                'Valeur': [b.balance * prices.get(b.symbol, 0) for b in balances]
+            })
+            
+            fig_pie = px.pie(
+                alloc_data,
+                values='Valeur',
+                names='Token',
+                color_discrete_sequence=['#667eea', '#00b894', '#fdcb6e', '#e17055', '#74b9ff'],
+                hole=0.45
             )
-        ])
+            fig_pie.update_layout(
+                plot_bgcolor='rgba(0,0,0,0)',
+                paper_bgcolor='rgba(0,0,0,0)',
+                height=300,
+                margin=dict(t=0, b=0, l=0, r=0),
+                showlegend=True,
+                legend=dict(orientation="h", yanchor="bottom", y=-0.2)
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
         
-        fig_bar.add_hline(y=0, line_dash="solid", line_color="rgba(255,255,255,0.3)")
-        
-        fig_bar.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            yaxis_title="% Change",
-            xaxis_title=None,
-            height=300,
-            margin=dict(t=20, b=0)
-        )
-        st.plotly_chart(fig_bar, use_container_width=True)
+        with col_chart2:
+            st.markdown("**📈 Tokens détenus**")
+            st.caption("Liste des tokens avec solde > 0")
+            for b in balances:
+                price = prices.get(b.symbol, 0)
+                value = b.balance * price
+                st.markdown(f"**{b.symbol}**: {b.balance:.6f} (${value:,.2f})")
 
 # ========== ACTIONS RAPIDES ==========
 st.markdown("---")

@@ -151,6 +151,36 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
+            # Social signals table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token TEXT NOT NULL,
+                    signal_type TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    message TEXT,
+                    sentiment_score REAL DEFAULT 0,
+                    hype_score REAL DEFAULT 0,
+                    mentions INTEGER DEFAULT 1,
+                    metadata TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Token trending stats (aggregated)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS token_trends (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token TEXT NOT NULL,
+                    mentions_1h INTEGER DEFAULT 0,
+                    mentions_24h INTEGER DEFAULT 0,
+                    avg_sentiment REAL DEFAULT 0,
+                    hype_score REAL DEFAULT 0,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(token)
+                )
+            ''')
     
     # ========== WALLET METHODS ==========
     
@@ -392,6 +422,80 @@ class Database:
                 except json.JSONDecodeError:
                     result[row['key']] = row['value']
             return result
+    
+    # ========== SIGNALS ==========
+    
+    def add_signal(self, token: str, signal_type: str, source: str, 
+                   message: Optional[str] = None, sentiment_score: float = 0,
+                   hype_score: float = 0, metadata: Optional[Dict] = None) -> int:
+        """Add a new social signal"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO signals (token, signal_type, source, message, sentiment_score, hype_score, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (token.upper(), signal_type, source, message, sentiment_score, hype_score, 
+                  json.dumps(metadata or {})))
+            return cursor.lastrowid
+    
+    def get_signals(self, limit: int = 50, token: Optional[str] = None, 
+                    source: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Get recent signals"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            query = 'SELECT * FROM signals WHERE 1=1'
+            params = []
+            
+            if token:
+                query += ' AND token = ?'
+                params.append(token.upper())
+            if source:
+                query += ' AND source = ?'
+                params.append(source)
+            
+            query += ' ORDER BY created_at DESC LIMIT ?'
+            params.append(limit)
+            
+            cursor.execute(query, params)
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def update_token_trend(self, token: str, mentions_1h: int, mentions_24h: int,
+                           avg_sentiment: float, hype_score: float):
+        """Update or insert token trending stats"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO token_trends (token, mentions_1h, mentions_24h, avg_sentiment, hype_score, last_updated)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (token.upper(), mentions_1h, mentions_24h, avg_sentiment, hype_score))
+    
+    def get_trending_tokens(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get top trending tokens by hype score"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT * FROM token_trends 
+                ORDER BY hype_score DESC, mentions_24h DESC 
+                LIMIT ?
+            ''', (limit,))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def get_token_sentiment(self, token: str) -> Optional[Dict[str, Any]]:
+        """Get sentiment data for a specific token"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM token_trends WHERE token = ?', (token.upper(),))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+    
+    def cleanup_old_signals(self, days: int = 7):
+        """Remove signals older than X days"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM signals 
+                WHERE created_at < datetime('now', ?)
+            ''', (f'-{days} days',))
     
     # ========== STATS ==========
     

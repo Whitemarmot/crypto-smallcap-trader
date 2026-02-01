@@ -22,3 +22,7 @@ htmlcov/
 # SQLite
 *.db
 data/
+
+# API Keys
+.env
+packages/frontend-streamlit/.env

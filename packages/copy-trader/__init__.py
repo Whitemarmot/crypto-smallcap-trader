@@ -24,6 +24,26 @@ from .whale_tracker import (
     KNOWN_WHALES
 )
 
+from .whale_api import (
+    # Main API functions
+    get_whale_transactions,
+    analyze_whale_portfolio,
+    get_known_whales,
+    check_for_alerts,
+    # Sync wrappers for Streamlit
+    get_whale_transactions_sync,
+    analyze_whale_portfolio_sync,
+    check_for_alerts_sync,
+    # Data classes
+    WhaleTransaction,
+    WhalePortfolio,
+    WhaleAlert,
+    TokenHolding,
+    # Whale databases
+    KNOWN_WHALES_ETHEREUM,
+    KNOWN_WHALES_BASE,
+)
+
 from .influencer_monitor import (
     InfluencerMonitor,
     KNOWN_INFLUENCERS,
@@ -59,11 +79,26 @@ __all__ = [
     "TradeType",
     "WalletType",
     
-    # Whale Tracking
+    # Whale Tracking (legacy)
     "WhaleTracker",
     "EtherscanClient",
     "DexScreenerClient",
     "KNOWN_WHALES",
+    
+    # Whale API (new, recommended)
+    "get_whale_transactions",
+    "analyze_whale_portfolio",
+    "get_known_whales",
+    "check_for_alerts",
+    "get_whale_transactions_sync",
+    "analyze_whale_portfolio_sync",
+    "check_for_alerts_sync",
+    "WhaleTransaction",
+    "WhalePortfolio",
+    "WhaleAlert",
+    "TokenHolding",
+    "KNOWN_WHALES_ETHEREUM",
+    "KNOWN_WHALES_BASE",
     
     # Influencer Monitoring
     "InfluencerMonitor",
