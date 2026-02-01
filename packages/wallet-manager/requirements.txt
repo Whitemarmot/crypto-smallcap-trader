@@ -1,0 +1,14 @@
+# Wallet Manager Dependencies
+
+# Database
+SQLAlchemy>=2.0.0
+
+# Cryptography for AES encryption
+cryptography>=41.0.0
+
+# Ethereum/Web3
+web3>=6.0.0
+eth-account>=0.10.0
+
+# Python type hints (for older Python versions)
+typing-extensions>=4.0.0

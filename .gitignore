@@ -2,3 +2,23 @@ node_modules/
 dist/
 .env
 *.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+.eggs/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# SQLite
+*.db
+data/
