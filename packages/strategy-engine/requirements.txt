@@ -1,0 +1,22 @@
+# Strategy Engine Dependencies
+
+# Async support
+asyncio-throttle>=1.0.0
+
+# Data validation
+pydantic>=2.0.0
+
+# Logging
+structlog>=23.0.0
+
+# Technical indicators (optionnel mais recommandé)
+pandas>=2.0.0
+numpy>=1.24.0
+ta>=0.10.0  # Technical Analysis library
+
+# Trading Engine (local package)
+# ../trading-engine
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
