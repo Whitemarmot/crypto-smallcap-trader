@@ -20,6 +20,10 @@ XAI_API_KEY = os.getenv('XAI_API_KEY')  # Grok
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # All models in one!
 
+# OpenClaw (Jean-Michel) - local gateway
+OPENCLAW_TOKEN = os.getenv('OPENCLAW_TOKEN', '354943dd82e0b4e2860dd25a7fcebdfcfc2b079c2a5bf34e')
+OPENCLAW_URL = os.getenv('OPENCLAW_URL', 'http://localhost:18789')
+
 # Log file path
 LOG_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'llm_logs.json')
 
@@ -40,6 +44,16 @@ class LLMLog:
 
 # Available models per provider
 LLM_MODELS = {
+    'openclaw': {
+        'name': '🥖 Jean-Michel (OpenClaw)',
+        'icon': '🥖',
+        'models': {
+            'openclaw:main': 'Jean-Michel (Claude Opus)',
+        },
+        'default': 'openclaw:main',
+        'api_key_env': 'OPENCLAW_TOKEN',
+        'always_available': True  # Local, no external API needed
+    },
     'openrouter': {
         'name': 'OpenRouter (tous modèles)',
         'icon': '🌐',
@@ -121,7 +135,11 @@ def get_available_providers() -> Dict[str, Any]:
     """Get providers that have API keys configured"""
     available = {}
     
-    # OpenRouter first (recommended - all models in one)
+    # OpenClaw (Jean-Michel) first - always available locally!
+    if OPENCLAW_TOKEN:
+        available['openclaw'] = LLM_MODELS['openclaw']
+    
+    # OpenRouter (recommended - all models in one)
     if OPENROUTER_API_KEY:
         available['openrouter'] = LLM_MODELS['openrouter']
     if ANTHROPIC_API_KEY:
@@ -340,13 +358,48 @@ def call_openrouter(prompt: str, model: str = 'anthropic/claude-3-haiku') -> tup
         return None, 0, 0, int((time.time() - start) * 1000), str(e)
 
 
+def call_openclaw(prompt: str, model: str = 'openclaw:main') -> tuple:
+    """Call OpenClaw (Jean-Michel) API - Local gateway, no external API needed!"""
+    import time
+    start = time.time()
+    
+    try:
+        response = requests.post(
+            f'{OPENCLAW_URL}/v1/chat/completions',
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {OPENCLAW_TOKEN}'
+            },
+            json={
+                'model': model,
+                'messages': [{'role': 'user', 'content': prompt}]
+            },
+            timeout=120  # Longer timeout for complex analysis
+        )
+        
+        latency = int((time.time() - start) * 1000)
+        
+        if response.status_code == 200:
+            data = response.json()
+            text = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            usage = data.get('usage', {})
+            return text, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), latency, None
+        else:
+            return None, 0, 0, latency, f"Error {response.status_code}: {response.text}"
+            
+    except Exception as e:
+        return None, 0, 0, int((time.time() - start) * 1000), str(e)
+
+
 def call_llm(prompt: str, provider: str, model: str) -> str:
     """
     Universal LLM caller with logging
     Returns the response text
     """
     # Call the appropriate provider
-    if provider == 'openrouter':
+    if provider == 'openclaw':
+        text, tokens_in, tokens_out, latency, error = call_openclaw(prompt, model)
+    elif provider == 'openrouter':
         text, tokens_in, tokens_out, latency, error = call_openrouter(prompt, model)
     elif provider == 'anthropic':
         text, tokens_in, tokens_out, latency, error = call_anthropic(prompt, model)
