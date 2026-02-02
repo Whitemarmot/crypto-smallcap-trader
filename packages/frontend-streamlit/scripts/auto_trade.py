@@ -528,12 +528,36 @@ def run_bot():
                     for t in sorted_tokens[:30]
                 ])
                 
+                # Build open positions section
+                positions_section = ""
+                if sim.get('positions'):
+                    pos_lines = []
+                    for symbol, pos in sim['positions'].items():
+                        price = get_price(symbol, tokens)
+                        if price <= 0:
+                            price = pos['avg_price']
+                        value = pos['amount'] * price
+                        pnl_pct = ((price / pos['avg_price']) - 1) * 100 if pos['avg_price'] > 0 else 0
+                        pnl_emoji = "🟢" if pnl_pct > 0 else "🔴"
+                        sl_info = f"SL: ${pos.get('stop_loss', 0):.6f}" if pos.get('stop_loss') else ""
+                        tp_info = f"TP1: ${pos.get('tp1', 0):.6f}" if pos.get('tp1') else ""
+                        pos_lines.append(f"- {symbol}: {pos['amount']:.2f} @ ${pos['avg_price']:.6f} → ${price:.6f} ({pnl_emoji} {pnl_pct:+.1f}%) | Val: ${value:.2f} | {sl_info} {tp_info}")
+                    positions_section = f"""
+## 📊 POSITIONS OUVERTES ({len(sim['positions'])})
+{chr(10).join(pos_lines)}
+Cash disponible: ${portfolio['cash']:.2f} | Exposure: {portfolio['exposure_pct']:.1f}%
+⚠️ Tu peux recommander SELL sur ces positions si le contexte l'exige (news négatives, perte momentum, etc.)
+"""
+                else:
+                    positions_section = "\n## 📊 POSITIONS OUVERTES: Aucune\n"
+                
                 prompt = f"""Tu es un trader crypto expert quantitatif. Analyse en profondeur et raisonne étape par étape.
 
 ## CONTEXTE MARCHÉ
 - Fear & Greed Index: {fg_val}/100 {'⚠️ EXTREME FEAR = potentielle opportunité contrarian' if fg_val < 25 else '(neutre)' if fg_val < 55 else '⚠️ GREED = prudence'}
 - Chain focus: {chain}
 - Profil: {profile_key.upper()} (min score: {profile.min_score})
+{positions_section}
 
 ## TOKENS À ANALYSER ({len(sorted_tokens)} total, top 30 par momentum)
 {token_list}
@@ -563,12 +587,15 @@ Avant de donner tes décisions, raisonne explicitement:
 
 D'abord, écris ton raisonnement en 2-3 lignes par token analysé.
 
-Puis termine par un JSON array:
+Puis termine par un JSON array (BUY pour acheter, SELL pour fermer une position ouverte):
 ```json
-[{{"symbol": "XXX", "action": "BUY", "confidence": 75, "stop_loss": 0.0045, "tp1": 0.0058, "tp2": 0.0072, "reason": "résumé court"}}]
+[
+  {{"symbol": "XXX", "action": "BUY", "confidence": 75, "stop_loss": 0.0045, "tp1": 0.0058, "tp2": 0.0072, "reason": "résumé court"}},
+  {{"symbol": "YYY", "action": "SELL", "confidence": 80, "reason": "perte de momentum, sortie préventive"}}
+]
 ```
 
-Si aucune opportunité intéressante après analyse: `[]`
+Si aucune action nécessaire après analyse: `[]`
 """
                 
                 # Call AI with extended thinking
@@ -622,7 +649,16 @@ Si aucune opportunité intéressante après analyse: `[]`
                         
                         log(f"🔍 Evaluating {sym}: action={act}, confidence={conf}, min_score={profile.min_score}")
                         
-                        if act == 'BUY' and conf >= profile.min_score:
+                        if act == 'SELL' and sym in sim.get('positions', {}):
+                            # AI-recommended sell for open position
+                            price = get_price(sym, tokens)
+                            if price <= 0:
+                                price = sim['positions'][sym]['avg_price']
+                            if execute_sell(sim, sym, price, f"IA: {reason}"):
+                                log(f"🔴 SELL {sym} @ ${price:.6f} (IA confidence {conf}%)", "INFO", d)
+                                log(f"   Reason: {reason}")
+                                executed.append(f"SELL:{sym}(IA)")
+                        elif act == 'BUY' and conf >= profile.min_score:
                             price = get_price(sym, tokens)
                             log(f"💵 Price for {sym}: ${price:.6f}")
                             
@@ -651,6 +687,8 @@ Si aucune opportunité intéressante après analyse: `[]`
                         else:
                             if act == 'BUY':
                                 log(f"⚠️ {sym} rejected: confidence {conf} < {profile.min_score}", "INFO")
+                            elif act == 'SELL' and sym not in sim.get('positions', {}):
+                                log(f"⚠️ {sym} SELL ignoré: pas de position ouverte", "WARN")
                 else:
                     log("No AI response", "ERROR")
         
