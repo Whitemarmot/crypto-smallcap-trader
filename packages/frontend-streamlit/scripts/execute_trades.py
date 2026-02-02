@@ -393,13 +393,48 @@ def main():
                 tx_hash = result[2] if len(result) > 2 else None
                 amount_out = result[3] if len(result) > 3 else 0
                 if success:
-                    # Update local tracking with actual amount received
+                    # For real wallets, create position directly (don't check JSON cash)
                     actual_price = usd / amount_out if amount_out > 0 else price
-                    execute_buy(sim, symbol, usd, actual_price, stop_loss, tp1, tp2)
-                    # Update position with token address for future sells
-                    if symbol in sim.get('positions', {}):
-                        sim['positions'][symbol]['token_address'] = token_address
-                        sim['positions'][symbol]['amount'] = amount_out if amount_out > 0 else sim['positions'][symbol].get('amount', 0)
+                    if 'positions' not in sim:
+                        sim['positions'] = {}
+                    
+                    if symbol in sim['positions']:
+                        # Average into existing
+                        pos = sim['positions'][symbol]
+                        total_qty = pos['amount'] + amount_out
+                        total_cost = (pos['amount'] * pos['avg_price']) + (amount_out * actual_price)
+                        pos['amount'] = total_qty
+                        pos['avg_price'] = total_cost / total_qty
+                    else:
+                        # New position
+                        sim['positions'][symbol] = {
+                            'amount': amount_out,
+                            'avg_price': actual_price,
+                            'entry_date': datetime.now().isoformat(),
+                            'token_address': token_address,
+                        }
+                    
+                    # Add SL/TP if provided
+                    if stop_loss:
+                        sim['positions'][symbol]['stop_loss'] = stop_loss
+                    if tp1:
+                        sim['positions'][symbol]['tp1'] = tp1
+                    if tp2:
+                        sim['positions'][symbol]['tp2'] = tp2
+                    
+                    # Add to history
+                    if 'history' not in sim:
+                        sim['history'] = []
+                    sim['history'].append({
+                        'ts': datetime.now().isoformat(),
+                        'action': 'BUY',
+                        'symbol': symbol,
+                        'qty': amount_out,
+                        'price': actual_price,
+                        'usd': usd,
+                        'tx_hash': tx_hash,
+                        'auto': True,
+                    })
             else:
                 # Paper trading
                 success, msg = execute_buy(sim, symbol, usd, price, stop_loss, tp1, tp2)

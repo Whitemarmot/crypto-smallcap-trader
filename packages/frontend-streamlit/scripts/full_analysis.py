@@ -555,12 +555,17 @@ def main():
                     import subprocess
                     wallet_id = wallets[0]['id'] if wallets else 'simulation'
                     
+                    # Pass environment including wallet password
+                    env = os.environ.copy()
+                    env['WALLET_MASTER_PASSWORD'] = os.environ.get('WALLET_MASTER_PASSWORD', 'BotCow')
+                    
                     result = subprocess.run(
                         ['python', 'scripts/execute_trades.py', '--wallet', wallet_id],
                         input=json.dumps(decisions),
                         capture_output=True,
                         text=True,
                         cwd=os.path.dirname(os.path.dirname(__file__)),
+                        env=env,
                         timeout=120
                     )
                     
