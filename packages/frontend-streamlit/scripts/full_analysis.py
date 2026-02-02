@@ -451,6 +451,10 @@ def main():
     
     # AUTO-EXECUTE: If there are BUY recommendations and slots available, execute trades
     auto_execute = os.environ.get('AUTO_EXECUTE', 'true').lower() == 'true'
+    
+    # Set wallet password if not in environment (needed for real trading)
+    if 'WALLET_MASTER_PASSWORD' not in os.environ:
+        os.environ['WALLET_MASTER_PASSWORD'] = 'BotCow'
     slots_available = total_slots - total_positions
     
     if auto_execute and slots_available > 0:
