@@ -1,59 +1,73 @@
 """
-Crypto SmallCap Trader - Home / Landing Page
-Frontend Streamlit pour le monitoring et contrôle du bot de trading
+Crypto SmallCap Trader - Dashboard Principal
 """
 
 import streamlit as st
 from datetime import datetime
-import sys
+import json
 import os
 
-# Add utils to path
-sys.path.insert(0, os.path.dirname(__file__))
-
-from utils.database import get_db
-from utils.config import SUPPORTED_NETWORKS
-
-# Configuration de la page
 st.set_page_config(
     page_title="🚀 SmallCap Trader",
     page_icon="🚀",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# Styles CSS personnalisés
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: bold;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        margin-bottom: 1rem;
-    }
-    .status-active {
-        color: #00ff88;
-        font-weight: bold;
-    }
-    .status-inactive {
-        color: #ff4444;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
+# Paths
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
+WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
+BOT_CONFIG = os.path.join(DATA_DIR, 'bot_config.json')
 
-# Database
-db = get_db()
+def load_json(path, default):
+    try:
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return default
+
+# Load data
+wallets_config = load_json(WALLETS_CONFIG, {'wallets': []})
+bot_config = load_json(BOT_CONFIG, {})
+wallets = wallets_config.get('wallets', [])
+
+# Calculate totals from all wallets
+total_value = 0
+total_positions = 0
+total_cash = 0
+win_count = 0
+total_trades = 0
+
+for w in wallets:
+    wallet_path = os.path.join(WALLETS_DIR, f"{w['id']}.json")
+    data = load_json(wallet_path, {'portfolio': {'USDC': 0}, 'positions': {}, 'closed_positions': []})
+    
+    cash = data.get('portfolio', {}).get('USDC', 0)
+    positions = data.get('positions', {})
+    closed = data.get('closed_positions', [])
+    
+    # Calculate position value
+    pos_value = 0
+    for sym, pos in positions.items():
+        pos_value += pos.get('amount', 0) * pos.get('avg_price', 0)
+    
+    total_value += cash + pos_value
+    total_cash += cash
+    total_positions += len(positions)
+    
+    # Win rate stats
+    win_count += sum(1 for p in closed if p.get('pnl_usd', 0) > 0)
+    total_trades += len(closed)
+
+win_rate = round(win_count / total_trades * 100) if total_trades > 0 else 0
 
 # Sidebar
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/rocket.png", width=80)
-    st.title("SmallCap Trader")
+    st.title("🚀 SmallCap Trader")
     st.markdown("---")
     
-    # Quick links
     st.page_link("pages/1_wallet.py", label="👛 Wallets", icon="👛")
     st.page_link("pages/9_positions.py", label="📊 Positions", icon="📊")
     st.page_link("pages/2_trades.py", label="📈 Trades", icon="📈")
@@ -62,92 +76,70 @@ with st.sidebar:
     st.markdown("---")
     st.caption("v0.2.0 | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
 
-# Header principal
-st.markdown('<p class="main-header">🚀 Crypto SmallCap Trader</p>', unsafe_allow_html=True)
-
-# Fetch real wallet data
-wallets = db.get_wallets()
-active_wallet = db.get_active_wallet()
-
-# Try to get real balances
-total_value = 0
-if active_wallet:
-    try:
-        from utils.balance import get_all_balances, get_prices
-        balances = get_all_balances(active_wallet.address, active_wallet.network)
-        if balances:
-            symbols = [b.symbol for b in balances]
-            prices = get_prices(symbols)
-            for b in balances:
-                total_value += b.balance * prices.get(b.symbol, 0)
-    except Exception:
-        pass
+# Header
+st.title("🚀 Crypto SmallCap Trader")
 
 # Métriques principales
 col1, col2, col3, col4 = st.columns(4)
 
-with col1:
-    st.metric(
-        label="💰 Valeur Portfolio",
-        value=f"${total_value:,.2f}",
-        delta=None
-    )
+col1.metric("💰 Valeur Portfolio", f"${total_value:,.2f}")
+col2.metric("📊 Positions", f"{total_positions}")
+col3.metric("💵 Cash", f"${total_cash:,.2f}")
+col4.metric("🎯 Win Rate", f"{win_rate}%" if total_trades > 0 else "--", 
+            delta=f"{total_trades} trades" if total_trades > 0 else None)
 
-with col2:
-    st.metric(
-        label="👛 Wallets",
-        value=str(len(wallets)),
-        delta="actifs" if wallets else None
-    )
+st.divider()
 
-with col3:
-    st.metric(
-        label="🔄 Trades Actifs",
-        value="0",
-        delta="En attente"
-    )
-
-with col4:
-    st.metric(
-        label="🎯 Win Rate",
-        value="--",
-        delta="Pas encore de trades"
-    )
-
-st.markdown("---")
-
-# Status Section
+# Status
 col_left, col_right = st.columns([2, 1])
 
 with col_left:
-    st.subheader("📊 Status")
+    st.subheader("📊 Wallets")
     
-    if active_wallet:
-        network_icon = SUPPORTED_NETWORKS.get(active_wallet.network, {}).get('icon', '🔗')
-        st.success(f"✅ Wallet actif: **{active_wallet.name}** ({network_icon} {active_wallet.network.upper()})")
-        st.code(active_wallet.address, language=None)
-        
-        if total_value > 0:
-            st.info(f"💰 Balance totale: **${total_value:,.2f}**")
-        else:
-            st.warning("⚠️ Wallet vide - Dépose des tokens pour commencer")
+    if wallets:
+        for w in wallets:
+            wallet_path = os.path.join(WALLETS_DIR, f"{w['id']}.json")
+            data = load_json(wallet_path, {'portfolio': {'USDC': 0}, 'positions': {}})
+            cash = data.get('portfolio', {}).get('USDC', 0)
+            positions = data.get('positions', {})
+            
+            pos_value = sum(p.get('amount', 0) * p.get('avg_price', 0) for p in positions.values())
+            total = cash + pos_value
+            
+            type_badge = "🎮" if w.get('type') == 'paper' else "💳"
+            status = "🟢" if w.get('enabled') else "⚪"
+            
+            st.markdown(f"{status} {type_badge} **{w['name']}** — ${total:,.2f} | {len(positions)} pos | {w.get('chain', 'base').upper()}")
+            
+            if w.get('address'):
+                st.caption(f"└─ `{w['address'][:10]}...{w['address'][-6:]}`")
     else:
         st.warning("⚠️ Aucun wallet configuré")
-        st.caption("Va dans 👛 Wallets pour créer ou importer un wallet")
     
-    # Bot status
-    st.markdown("---")
-    st.subheader("🤖 Trading Bot")
-    st.info("⏸️ Le bot de trading n'est pas encore actif. Configure tes stratégies dans l'onglet Stratégies.")
+    st.divider()
+    st.subheader("🤖 Bot Status")
+    
+    # Le bot tourne via cron - vérifier si enabled
+    bot_enabled = bot_config.get('enabled', False)
+    if bot_enabled:
+        st.success("✅ Bot actif (cron toutes les heures)")
+        st.caption(f"Dernière config: {bot_config.get('updated_at', 'N/A')}")
+    else:
+        st.info("⏸️ Bot en pause")
 
 with col_right:
-    st.subheader("🚀 Démarrage Rapide")
+    st.subheader("✅ Checklist")
+    
+    has_wallet = len(wallets) > 0
+    has_sim_funds = total_value > 0
+    has_config = any(w.get('ai_profile') for w in wallets)
+    bot_running = bot_config.get('enabled', False)
     
     steps = [
-        ("👛 Créer un wallet", len(wallets) > 0),
-        ("💰 Déposer des fonds", total_value > 0),
-        ("📊 Configurer stratégie", False),
-        ("🤖 Lancer le bot", False),
+        ("👛 Créer un wallet", has_wallet),
+        ("💰 Fonds disponibles", has_sim_funds),
+        ("⚙️ Config wallet", has_config),
+        ("🤖 Bot actif", bot_running),
     ]
     
     for step, done in steps:
@@ -155,8 +147,11 @@ with col_right:
             st.markdown(f"✅ ~~{step}~~")
         else:
             st.markdown(f"⬜ {step}")
+    
+    if all(done for _, done in steps):
+        st.success("🎉 Tout est prêt!")
 
-st.markdown("---")
+st.divider()
 
 # Navigation
 st.subheader("📍 Navigation")
@@ -178,6 +173,5 @@ with nav_cols[3]:
     if st.button("🤖 Logs IA", use_container_width=True):
         st.switch_page("pages/9_logs_ia.py")
 
-# Footer
-st.markdown("---")
-st.caption("SmallCap Trader v0.1.0 - Trading bot basé sur le sentiment social 📱")
+st.divider()
+st.caption("SmallCap Trader v0.2.0 - Bot trading IA par Jean-Michel 🥖")
