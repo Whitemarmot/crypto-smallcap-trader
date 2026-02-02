@@ -9,6 +9,10 @@ import os
 import sys
 import time
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# Timezone for display
+TZ_PARIS = ZoneInfo('Europe/Paris')
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -610,7 +614,7 @@ def main():
                 summary_lines.append(f"  • {t.get('symbol')}: {change:+.1f}% | score {t.get('score', 0)}")
         
         bot_status = {
-            'last_run': datetime.now().strftime('%H:%M'),
+            'last_run': datetime.now(TZ_PARIS).strftime('%H:%M'),
             'last_run_ts': time.time(),
             'status': 'ok' if trades_count > 0 else 'partial' if tokens_count > 0 else 'error',
             'tokens_analyzed': tokens_count,

@@ -8,8 +8,12 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import sys
 import os
+
+# Timezone
+TZ_PARIS = ZoneInfo('Europe/Paris')
 
 # Add utils to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -54,7 +58,7 @@ col_header, col_refresh = st.columns([4, 1])
 
 with col_header:
     st.markdown('<p class="main-title">🏠 Dashboard Multi-Wallet</p>', unsafe_allow_html=True)
-    st.caption(f"🌐 Réseau actif: {config.active_network.upper()} | ⏰ {datetime.now().strftime('%H:%M:%S')}")
+    st.caption(f"🌐 Réseau actif: {config.active_network.upper()} | ⏰ {datetime.now(TZ_PARIS).strftime('%H:%M:%S')}")
 
 with col_refresh:
     if st.button("🔄 Rafraîchir", use_container_width=True):
