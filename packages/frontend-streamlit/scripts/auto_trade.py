@@ -139,6 +139,9 @@ def get_daily_trade_count():
 PRICE_CACHE = {}
 PRICE_CACHE_TTL = 300  # 5 minutes
 
+# Web search for news/sentiment (requires BRAVE_API_KEY env var)
+# TODO: Add Brave API key or use OpenClaw web_search in cron
+
 def get_price(symbol: str, tokens_data: list = None) -> float:
     """Get price from cached tokens data or CMC API"""
     global PRICE_CACHE
@@ -528,6 +531,9 @@ def run_bot():
                 sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
                 log(f"📊 Analyzing {len(tokens)} tokens, showing top 30 by 24h performance")
                 
+                # News section placeholder (requires BRAVE_API_KEY)
+                news_section = ""
+                
                 token_list = "\n".join([
                     f"- {t['symbol']}: ${t.get('price',0):.6f} | 24h: {t.get('price_change_24h',0) or 0:+.1f}% | MCap: ${(t.get('market_cap',0) or 0)/1e6:.1f}M"
                     for t in sorted_tokens[:30]
@@ -571,7 +577,7 @@ Cash disponible: ${portfolio['cash']:.2f} | Exposure: {portfolio['exposure_pct']
 
 ## TOKENS À ANALYSER ({len(sorted_tokens)} total, top 30 par momentum)
 {token_list}
-
+{news_section}
 ## PROCESSUS DE RAISONNEMENT
 
 Avant de donner tes décisions, raisonne explicitement:
