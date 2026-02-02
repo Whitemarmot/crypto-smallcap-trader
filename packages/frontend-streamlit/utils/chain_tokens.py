@@ -36,13 +36,23 @@ def get_trending_tokens_on_chain(chain: str, min_liquidity: float = None,
     
     supported_dexes = CHAIN_DEXES.get(chain, [])
     
-    # Common search terms for finding smallcap gainers on Base
-    search_terms = [
+    # Search terms by mcap tier
+    SEARCH_TERMS_SMALL = [
         'meme', 'ai', 'degen', 'pepe', 'dog', 'cat', 'moon', 'based', 'brett',
         'frog', 'ape', 'wojak', 'chad', 'bobo', 'apu', 'toshi', 'normie',
-        'aero', 'cbeth', 'usdc', 'virtual', 'friend', 'higher', 'lower',
-        'bald', 'fomo', 'wagmi', 'gm', 'ser', 'anon', 'wen', 'pump',
+        'bald', 'fomo', 'wagmi', 'gm', 'ser', 'anon', 'wen', 'pump', 'flower',
     ]
+    SEARCH_TERMS_MID = [
+        'aero', 'virtual', 'morpho', 'seamless', 'extra', 'well', 'alien',
+        'cbeth', 'cbbtc', 'usdc', 'dai', 'weth', 'comp', 'uni', 'link',
+        'render', 'ondo', 'friend', 'higher', 'lower', 'zora', 'farcaster',
+    ]
+    
+    # Use appropriate search terms based on max_mcap
+    if max_mcap >= 100_000_000:  # Mid cap or higher
+        search_terms = SEARCH_TERMS_MID + SEARCH_TERMS_SMALL[:5]
+    else:
+        search_terms = SEARCH_TERMS_SMALL
     
     all_tokens = []
     seen_addresses = set()
