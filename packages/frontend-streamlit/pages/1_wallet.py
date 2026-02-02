@@ -400,12 +400,20 @@ def render_wallet_card(wallet, config):
                 else:
                     default_mcap = current_mcap if isinstance(current_mcap, list) else ['small']
                 
+                # Clean session state if corrupted (was selectbox, now multiselect)
+                mcap_key = f"mcap_{wallet_id}"
+                if mcap_key in st.session_state:
+                    val = st.session_state[mcap_key]
+                    # If it's a string (old selectbox value), clear it
+                    if isinstance(val, str):
+                        del st.session_state[mcap_key]
+                
                 new_mcap = st.multiselect(
                     "💰 Market Cap (multi)",
                     options=list(MARKET_CAP_PRESETS.keys()),
                     default=[m for m in default_mcap if m in MARKET_CAP_PRESETS],
                     format_func=lambda x: MARKET_CAP_PRESETS[x]['name'],
-                    key=f"mcap_{wallet_id}"
+                    key=mcap_key
                 )
                 if not new_mcap:
                     new_mcap = ['small']  # Default if nothing selected
