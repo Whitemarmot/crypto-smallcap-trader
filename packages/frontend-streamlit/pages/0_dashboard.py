@@ -101,14 +101,17 @@ def load_wallet_data(wallet_id):
             return json.load(f)
     return {'portfolio': {'USDC': 0}, 'positions': {}}
 
-# Load paper trading wallets
+# Load wallets from config
 paper_wallet_config = load_wallet_config()
 paper_wallets_data = []
+real_wallets_data = []
 
 for pw in paper_wallet_config.get('wallets', []):
     if not pw.get('enabled', True):
         continue
+    
     wallet_id = pw.get('id', '')
+    wallet_type = pw.get('type', 'paper')
     wallet_data = load_wallet_data(wallet_id)
     
     cash = wallet_data.get('portfolio', {}).get('USDC', 0)
@@ -121,15 +124,25 @@ for pw in paper_wallet_config.get('wallets', []):
     )
     wallet_value = cash + positions_value
     
-    paper_wallets_data.append({
+    wallet_info = {
         'id': wallet_id,
         'name': pw.get('name', wallet_id),
-        'type': pw.get('type', 'paper'),
+        'type': wallet_type,
+        'address': pw.get('address', ''),
+        'chain': pw.get('chain', 'base'),
         'cash': cash,
+        'positions': positions,
         'positions_count': len(positions),
         'total_value': wallet_value,
         'max_positions': pw.get('max_positions', 10),
-    })
+    }
+    
+    # Separate by type
+    if wallet_type == 'real':
+        real_wallets_data.append(wallet_info)
+    else:
+        paper_wallets_data.append(wallet_info)
+    
     total_portfolio_value += wallet_value
 
 # Also try on-chain balances for real wallets
@@ -218,10 +231,41 @@ if paper_wallets_data:
         
         st.markdown("---")
 
-# ========== VUE WALLETS (On-chain) ==========
-st.subheader("👛 Wallets On-Chain")
+# ========== WALLETS RÉELS ==========
+st.subheader("💳 Wallets Réels")
 
+if real_wallets_data:
+    for rw in real_wallets_data:
+        with st.container():
+            col_info, col_cash, col_positions, col_value = st.columns([3, 2, 2, 2])
+            
+            with col_info:
+                chain_icon = {'base': '🔵', 'ethereum': '🔷', 'arbitrum': '🔶'}.get(rw['chain'], '⛓️')
+                st.markdown(f"**🟢 {rw['name']}**")
+                st.caption(f"{chain_icon} {rw['chain'].upper()} | `{rw['address'][:10]}...{rw['address'][-6:]}`")
+            
+            with col_cash:
+                st.metric("💵 Balance", f"${rw['cash']:,.2f}")
+            
+            with col_positions:
+                st.metric("📊 Positions", f"{rw['positions_count']}/{rw['max_positions']}")
+            
+            with col_value:
+                st.metric("💰 Total", f"${rw['total_value']:,.2f}")
+            
+            # Show positions tokens if any
+            if rw['positions']:
+                tokens_str = ", ".join([f"{sym}: {p.get('amount', 0):.2f}" for sym, p in list(rw['positions'].items())[:3]])
+                st.caption(f"🪙 {tokens_str}")
+        
+        st.markdown("---")
+else:
+    st.info("💳 Aucun wallet réel configuré.")
+
+# ========== VUE WALLETS (Database - legacy) ==========
 if wallets:
+    st.subheader("👛 Wallets On-Chain (DB)")
+    
     for wallet in wallets:
         wallet_data = wallet_balances.get(wallet.id, {'total_value': 0, 'balances': []})
         balance_value = wallet_data['total_value']
@@ -252,10 +296,6 @@ if wallets:
                     st.switch_page("pages/1_wallet.py")
         
         st.markdown("---")
-else:
-    st.info("👛 Aucun wallet configuré.")
-    if st.button("➕ Ajouter un Wallet", use_container_width=True):
-        st.switch_page("pages/1_wallet.py")
 
 # ========== ALLOCATION PIE CHART ==========
 if total_portfolio_value > 0 and BALANCE_AVAILABLE:
