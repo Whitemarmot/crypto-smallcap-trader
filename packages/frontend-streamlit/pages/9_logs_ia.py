@@ -1,20 +1,61 @@
 """
-📜 Logs IA - Historique des prompts et réponses LLM
+📜 Logs IA - Historique des prompts et réponses LLM + Bot Trading
 """
 
 import streamlit as st
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+TZ_PARIS = ZoneInfo('Europe/Paris')
 
 st.set_page_config(
     page_title="📜 Logs IA | SmallCap Trader",
     page_icon="📜",
     layout="wide"
 )
+
+# ========== BOT TRADING LOGS ==========
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+BOT_STATUS_FILE = os.path.join(DATA_DIR, 'bot_status.json')
+BOT_LOG_FILE = os.path.join(DATA_DIR, 'bot_run.log')
+
+def get_bot_status():
+    try:
+        if os.path.exists(BOT_STATUS_FILE):
+            with open(BOT_STATUS_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return None
+
+st.title("📜 Logs IA & Bot")
+
+# Bot status section
+st.subheader("🤖 Bot Trading - Dernier Run")
+bot_status = get_bot_status()
+
+if bot_status:
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("⏰ Dernier Run", bot_status.get('last_run', 'N/A'))
+    with col2:
+        st.metric("📊 Tokens analysés", bot_status.get('tokens_analyzed', 0))
+    with col3:
+        st.metric("🎯 Trades exécutés", bot_status.get('trades_executed', 0))
+    
+    # Summary
+    if bot_status.get('summary'):
+        with st.expander("📋 Résumé complet", expanded=True):
+            st.markdown(bot_status.get('summary', ''))
+else:
+    st.info("⏳ Aucun run enregistré. Lance une analyse via le Dashboard!")
+
+st.markdown("---")
 
 try:
     from utils.llm_providers import get_llm_logs, get_available_providers, LLM_MODELS
@@ -23,7 +64,8 @@ except ImportError as e:
     MODULES_OK = False
     st.error(f"Module error: {e}")
 
-st.title("📜 Logs IA")
+# LLM Logs section
+st.subheader("🧠 Logs LLM (OpenRouter/Claude)")
 st.caption("Historique des prompts et réponses des modèles IA")
 
 if MODULES_OK:
