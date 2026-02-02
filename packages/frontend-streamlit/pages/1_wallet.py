@@ -390,13 +390,25 @@ def render_wallet_card(wallet, config):
                 )
             
             with col2:
-                new_mcap = st.selectbox(
-                    "💰 Market Cap",
+                # Support multiple mcap selection
+                current_mcap = wallet.get('market_cap', 'small')
+                if isinstance(current_mcap, str):
+                    if ',' in current_mcap:
+                        default_mcap = [m.strip() for m in current_mcap.split(',')]
+                    else:
+                        default_mcap = [current_mcap]
+                else:
+                    default_mcap = current_mcap if isinstance(current_mcap, list) else ['small']
+                
+                new_mcap = st.multiselect(
+                    "💰 Market Cap (multi)",
                     options=list(MARKET_CAP_PRESETS.keys()),
+                    default=[m for m in default_mcap if m in MARKET_CAP_PRESETS],
                     format_func=lambda x: MARKET_CAP_PRESETS[x]['name'],
-                    index=list(MARKET_CAP_PRESETS.keys()).index(wallet.get('market_cap', 'small')),
                     key=f"mcap_{wallet_id}"
                 )
+                if not new_mcap:
+                    new_mcap = ['small']  # Default if nothing selected
             
             with col3:
                 new_chain = st.selectbox(

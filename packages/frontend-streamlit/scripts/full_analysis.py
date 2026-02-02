@@ -247,15 +247,37 @@ def main():
             main_chain = w['chain']
             break
     
-    # Get tokens based on wallet's mcap preference
-    mcap = config.get('mcap', 'small')
+    # Get tokens based on wallet's mcap preference (supports single or multiple ranges)
+    mcap_config = config.get('mcap', 'small')
     mcap_ranges = {
         'micro': (0, 1_000_000),
         'small': (1_000_000, 100_000_000),
         'mid': (100_000_000, 1_000_000_000),
         'large': (1_000_000_000, float('inf')),
     }
-    min_mcap, max_mcap = mcap_ranges.get(mcap, (1_000_000, 100_000_000))
+    
+    # Support multiple ranges: "small", ["small", "mid"], or "small,mid"
+    if isinstance(mcap_config, list):
+        selected_ranges = mcap_config
+    elif ',' in str(mcap_config):
+        selected_ranges = [r.strip() for r in mcap_config.split(',')]
+    else:
+        selected_ranges = [mcap_config]
+    
+    # Calculate combined min/max from selected ranges
+    min_mcap = float('inf')
+    max_mcap = 0
+    for r in selected_ranges:
+        if r in mcap_ranges:
+            r_min, r_max = mcap_ranges[r]
+            min_mcap = min(min_mcap, r_min)
+            max_mcap = max(max_mcap, r_max if r_max != float('inf') else 10_000_000_000)
+    
+    # Fallback if no valid range
+    if min_mcap == float('inf'):
+        min_mcap, max_mcap = 1_000_000, 100_000_000
+    
+    print(f"📊 MCap filter: {selected_ranges} (${min_mcap/1e6:.0f}M - ${max_mcap/1e6:.0f}M)", file=sys.stderr)
     
     # NEW: Get tokens DIRECTLY from chain DEXes (not CMC)
     print(f"🔗 Fetching tokens directly from {main_chain} DEXes...", file=sys.stderr)
