@@ -993,7 +993,7 @@ def get_eth_price_usd() -> float:
 def buy_token(chain: str, wallet_address: str, token_symbol: str, 
               token_address: str, amount_usd: float, use_aerodrome: bool = False) -> tuple:
     """
-    Buy a token with ETH (Paraswap first, Aerodrome fallback on Base)
+    Buy a token with USDC first, then ETH as fallback (Paraswap/KyberSwap)
     
     Args:
         chain: Chain name (base, ethereum, etc.)
@@ -1004,33 +1004,72 @@ def buy_token(chain: str, wallet_address: str, token_symbol: str,
         use_aerodrome: Force Aerodrome (skip Paraswap)
     
     Returns:
-        (success: bool, message: str, tx_hash: str or None)
+        (success: bool, message: str, tx_hash: str or None, amount_out: float)
     """
+    # USDC addresses by chain
+    USDC_ADDRESSES = {
+        'base': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        'ethereum': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        'arbitrum': '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    }
+    
     try:
         # Load private key from wallet_keys module
         from utils.wallet_keys import get_private_key
         private_key = get_private_key(wallet_address)
         if not private_key:
-            return False, "Private key not found", None
+            return False, "Private key not found", None, 0
         
         # Add 0x prefix if missing
         if not private_key.startswith('0x'):
             private_key = '0x' + private_key
         
-        # Calculate ETH amount needed
-        eth_price = get_eth_price_usd()
-        eth_amount = amount_usd / eth_price
-        
-        # Check balance first
         trader = RealTrader(chain=chain, private_key=private_key)
-        amount_wei = trader.w3.to_wei(eth_amount, 'ether')
-        balance = trader.w3.eth.get_balance(trader.address)
-        if balance < amount_wei:
-            eth_balance = float(trader.w3.from_wei(balance, 'ether'))
-            return False, f"Insufficient ETH: {eth_balance:.4f} < {eth_amount:.4f}", None
         
-        # Try Paraswap first (unless forced Aerodrome or not Base)
-        if not use_aerodrome and chain.lower() == "base":
+        # Check USDC balance first (preferred)
+        usdc_address = USDC_ADDRESSES.get(chain.lower())
+        usdc_balance = 0
+        if usdc_address:
+            usdc_abi = [{'inputs':[{'name':'','type':'address'}],'name':'balanceOf','outputs':[{'name':'','type':'uint256'}],'stateMutability':'view','type':'function'}]
+            usdc_contract = trader.w3.eth.contract(address=trader.w3.to_checksum_address(usdc_address), abi=usdc_abi)
+            usdc_balance = usdc_contract.functions.balanceOf(trader.address).call() / 1e6
+        
+        # Check ETH balance
+        eth_balance = float(trader.w3.from_wei(trader.w3.eth.get_balance(trader.address), 'ether'))
+        eth_price = get_eth_price_usd()
+        eth_value = eth_balance * eth_price
+        
+        print(f"  💰 Balances: ${usdc_balance:.2f} USDC, {eth_balance:.4f} ETH (${eth_value:.2f})", file=sys.stderr)
+        
+        # Decide which token to use for payment
+        use_usdc = usdc_balance >= amount_usd
+        use_eth = eth_value >= amount_usd * 1.1  # 10% buffer for gas
+        
+        if not use_usdc and not use_eth:
+            return False, f"Insufficient funds: ${usdc_balance:.2f} USDC, ${eth_value:.2f} ETH value", None, 0
+        
+        # Try USDC swap first (if enough balance)
+        if use_usdc and chain.lower() == "base":
+            amount_wei = int(amount_usd * 1e6)  # USDC has 6 decimals
+            
+            result = trader.execute_swap(
+                from_token=usdc_address,
+                to_token=token_address,
+                amount_wei=amount_wei,
+                slippage=2.0,
+            )
+            
+            if result['success']:
+                amount_out = result.get('amount_out', 0)
+                return True, f"[USDC→{token_symbol}] Bought for ${amount_usd:.2f}", result['tx_hash'], amount_out
+            else:
+                print(f"  ⚠️ USDC swap failed: {result.get('error')}, trying ETH...", file=sys.stderr)
+        
+        # ETH swap fallback
+        if use_eth:
+            eth_amount = amount_usd / eth_price
+            amount_wei = trader.w3.to_wei(eth_amount, 'ether')
+            
             result = trader.execute_swap(
                 from_token=NATIVE_TOKEN,
                 to_token=token_address,
@@ -1039,25 +1078,29 @@ def buy_token(chain: str, wallet_address: str, token_symbol: str,
             )
             
             if result['success']:
-                return True, f"Bought {token_symbol} for {eth_amount:.4f} ETH (${amount_usd:.2f}) via Paraswap", result['tx_hash']
+                amount_out = result.get('amount_out', 0)
+                return True, f"[ETH→{token_symbol}] Bought for ${amount_usd:.2f}", result['tx_hash'], amount_out
             
             # Paraswap failed - try Aerodrome
             print(f"Paraswap failed: {result.get('error')}, trying Aerodrome...")
         
-        # Aerodrome fallback (Base only)
-        if chain.lower() == "base":
+        # Aerodrome fallback (Base only, ETH only)
+        if chain.lower() == "base" and use_eth:
+            eth_amount = amount_usd / eth_price
+            amount_wei = trader.w3.to_wei(eth_amount, 'ether')
             aero = AerodromeTrader(private_key=private_key)
             result = aero.swap_eth_for_tokens(token_address, amount_wei, slippage=3.0)
             
             if result['success']:
-                return True, f"Bought {token_symbol} for {eth_amount:.4f} ETH (${amount_usd:.2f}) via Aerodrome", result['tx_hash']
+                amount_out = result.get('amount_out', 0)
+                return True, f"[Aerodrome] Bought {token_symbol} for ${amount_usd:.2f}", result['tx_hash'], amount_out
             else:
-                return False, f"Aerodrome failed: {result.get('error')}", result.get('tx_hash')
+                return False, f"Aerodrome failed: {result.get('error')}", result.get('tx_hash'), 0
         
-        return False, "Both Paraswap and Aerodrome failed", None
+        return False, "All swap methods failed", None, 0
             
     except Exception as e:
-        return False, f"Error: {str(e)}", None
+        return False, f"Error: {str(e)}", None, 0
 
 
 def sell_token(chain: str, wallet_address: str, token_symbol: str,

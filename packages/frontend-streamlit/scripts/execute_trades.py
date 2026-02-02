@@ -246,10 +246,10 @@ def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_u
         except Exception as e:
             errors.append(f"KyberSwap: {str(e)}")
     
-    # 2. Try Paraswap (aggregator)
+    # 2. Try Paraswap/USDC swap (aggregator)
     try:
         from utils.real_trader import buy_token
-        success, msg, tx_hash = buy_token(
+        success, msg, tx_hash, amount_out = buy_token(
             chain=chain,
             wallet_address=address,
             token_symbol=symbol,
@@ -258,7 +258,7 @@ def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_u
             use_aerodrome=False,  # Try Paraswap first
         )
         if success:
-            return True, f"[Paraswap] {msg}", tx_hash, 0
+            return True, msg, tx_hash, amount_out
         errors.append(f"Paraswap: {msg}")
     except Exception as e:
         errors.append(f"Paraswap: {str(e)}")
@@ -266,7 +266,7 @@ def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_u
     # 3. Try Aerodrome directly (native Base DEX)
     try:
         from utils.real_trader import buy_token
-        success, msg, tx_hash = buy_token(
+        success, msg, tx_hash, amount_out = buy_token(
             chain=chain,
             wallet_address=address,
             token_symbol=symbol,
@@ -275,7 +275,7 @@ def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_u
             use_aerodrome=True,  # Force Aerodrome
         )
         if success:
-            return True, f"[Aerodrome] {msg}", tx_hash, 0
+            return True, msg, tx_hash, amount_out
         errors.append(f"Aerodrome: {msg}")
     except Exception as e:
         errors.append(f"Aerodrome: {str(e)}")
