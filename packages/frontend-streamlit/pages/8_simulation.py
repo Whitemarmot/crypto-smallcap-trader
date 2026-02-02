@@ -31,6 +31,7 @@ try:
     )
     from utils.config import load_config, AI_PROFILES
     from utils.ai_agent import analyze_token as ai_analyze_token, analyze_multiple_tokens
+    from utils.llm_providers import get_available_providers, LLM_MODELS
     import requests
     MODULES_OK = True
     AI_AGENT_OK = True
@@ -315,18 +316,48 @@ with tab2:
         fg_color = "#ff4444" if fg.value <= 25 else "#ff8844" if fg.value <= 45 else "#ffff44" if fg.value <= 55 else "#88ff44"
         st.markdown(f"😱 **Fear & Greed:** {fg.value} ({fg.classification})")
     
-    # AI Profile selector
-    profile_col1, profile_col2 = st.columns([2, 1])
-    with profile_col1:
+    # LLM Provider selection
+    available_providers = get_available_providers()
+    
+    llm_col1, llm_col2, llm_col3 = st.columns(3)
+    
+    with llm_col1:
+        if available_providers:
+            provider_options = list(available_providers.keys())
+            selected_provider = st.selectbox(
+                "🧠 Modèle IA",
+                options=provider_options,
+                format_func=lambda x: f"{LLM_MODELS[x]['icon']} {LLM_MODELS[x]['name']}",
+                index=0
+            )
+        else:
+            selected_provider = None
+            st.warning("⚠️ Aucune clé API configurée")
+    
+    with llm_col2:
+        if selected_provider:
+            model_options = list(LLM_MODELS[selected_provider]['models'].keys())
+            selected_model = st.selectbox(
+                "📦 Version",
+                options=model_options,
+                format_func=lambda x: LLM_MODELS[selected_provider]['models'][x],
+                index=0
+            )
+        else:
+            selected_model = None
+            st.caption("Mode: règles simples")
+    
+    with llm_col3:
         selected_profile = st.selectbox(
-            "🤖 Profil IA pour l'analyse",
+            "🎯 Profil trading",
             options=list(AI_PROFILES.keys()),
             format_func=lambda x: AI_PROFILES[x].name,
             index=1  # Default: modere
         )
-    with profile_col2:
-        profile_info = AI_PROFILES[selected_profile]
-        st.caption(f"Score min: {profile_info.min_score} | Trade: {profile_info.trade_amount_pct}%")
+    
+    # Show profile info
+    profile_info = AI_PROFILES[selected_profile]
+    st.caption(f"📊 Score min: {profile_info.min_score} | Trade: {profile_info.trade_amount_pct}% | Max positions: {profile_info.max_positions}")
     
     # Analyze trending tokens
     if st.button("🚀 Analyser et Trader (IA)", type="primary", use_container_width=True):
@@ -347,7 +378,12 @@ with tab2:
                 progress.progress((i + 1) / 10, text=f"🧠 IA analyse {token.symbol}...")
                 
                 # Use AI Agent for decision
-                ai_decision = ai_analyze_token(token.symbol, selected_profile)
+                ai_decision = ai_analyze_token(
+                    token.symbol, 
+                    selected_profile,
+                    provider=selected_provider or 'anthropic',
+                    model=selected_model
+                )
                 
                 if not ai_decision or not ai_decision.price:
                     continue

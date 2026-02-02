@@ -1,6 +1,6 @@
 """
 🤖 AI Trading Agent - Vrai agent IA autonome
-Utilise Claude pour analyser et décider
+Support multi-LLM: Claude, Gemini, Grok, OpenAI
 """
 
 import os
@@ -13,9 +13,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Anthropic API
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+# Import multi-LLM provider
+try:
+    from utils.llm_providers import call_llm, get_available_providers, LLM_MODELS
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
 
 
 @dataclass
@@ -124,32 +127,35 @@ def fetch_token_data(symbol: str) -> Dict[str, Any]:
     return data
 
 
-def ask_claude_decision(token_data: Dict[str, Any], profile: str = 'modere') -> AIDecision:
-    """Ask Claude to analyze data and make a trading decision"""
-    
-    if not ANTHROPIC_API_KEY:
-        # Fallback to rule-based if no API key
-        return fallback_decision(token_data)
-    
-    # Build the prompt
+def build_trading_prompt(token_data: Dict[str, Any], profile: str = 'modere') -> str:
+    """Build the trading analysis prompt"""
     symbol = token_data.get('symbol', 'UNKNOWN')
+    
+    # Format numbers safely
+    def fmt_num(val, decimals=2):
+        if val is None:
+            return 'N/A'
+        try:
+            return f"{float(val):,.{decimals}f}"
+        except:
+            return str(val)
     
     prompt = f"""Tu es un trader crypto expérimenté. Analyse ces données et donne une décision de trading.
 
 ## Données du token {symbol}:
 
 **Prix & Marché:**
-- Prix actuel: ${token_data.get('price', 'N/A')}
-- Variation 24h: {token_data.get('price_change_24h', 'N/A')}%
-- Variation 7j: {token_data.get('price_change_7d', 'N/A')}%
-- Volume 24h: ${token_data.get('volume_24h', 'N/A'):,.0f}
-- Market Cap: ${token_data.get('market_cap', 'N/A'):,.0f}
+- Prix actuel: ${fmt_num(token_data.get('price'), 6)}
+- Variation 24h: {fmt_num(token_data.get('price_change_24h'))}%
+- Variation 7j: {fmt_num(token_data.get('price_change_7d'))}%
+- Volume 24h: ${fmt_num(token_data.get('volume_24h'), 0)}
+- Market Cap: ${fmt_num(token_data.get('market_cap'), 0)}
 
 **Sentiment:**
 - Fear & Greed Index: {token_data.get('fear_greed', {}).get('value', 'N/A')} ({token_data.get('fear_greed', {}).get('classification', 'N/A')})
 - Sentiment CoinGecko: {token_data.get('sentiment', 'N/A')}% positif
 - Google Trends (0-100): {token_data.get('google_trends', 'N/A')}
-- Trending Rank: #{token_data.get('trending_rank', 'Non trending')}
+- Trending Rank: #{token_data.get('trending_rank') or 'Non trending'}
 
 **News récentes:**
 {chr(10).join(['- ' + n.get('title', '') for n in token_data.get('news', [])[:3]]) or '- Aucune news récente'}
@@ -165,58 +171,69 @@ Réponds UNIQUEMENT avec un JSON valide (pas de texte avant ou après):
 {{
     "action": "BUY" ou "SELL" ou "HOLD",
     "confidence": 0-100,
-    "reasoning": "Explication courte de ta décision",
+    "reasoning": "Explication courte de ta décision en français",
     "target_price": prix cible si BUY (ou null),
     "stop_loss": prix stop-loss si BUY (ou null)
 }}
 """
+    return prompt
 
+
+def ask_llm_decision(token_data: Dict[str, Any], profile: str = 'modere', 
+                     provider: str = 'anthropic', model: str = None) -> AIDecision:
+    """Ask any LLM to analyze data and make a trading decision"""
+    
+    if not LLM_AVAILABLE:
+        return fallback_decision(token_data)
+    
+    # Check if provider is available
+    available = get_available_providers()
+    if provider not in available:
+        # Try first available provider
+        if available:
+            provider = list(available.keys())[0]
+        else:
+            return fallback_decision(token_data)
+    
+    # Use default model if not specified
+    if not model:
+        model = LLM_MODELS[provider]['default']
+    
+    symbol = token_data.get('symbol', 'UNKNOWN')
+    prompt = build_trading_prompt(token_data, profile)
+    
     try:
-        response = requests.post(
-            ANTHROPIC_URL,
-            headers={
-                'Content-Type': 'application/json',
-                'x-api-key': ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-            },
-            json={
-                'model': 'claude-3-haiku-20240307',  # Fast & cheap for trading decisions
-                'max_tokens': 500,
-                'messages': [{'role': 'user', 'content': prompt}]
-            },
-            timeout=30
+        # Call LLM with logging
+        content = call_llm(prompt, provider, model)
+        
+        if not content:
+            return fallback_decision(token_data)
+        
+        # Parse JSON from response
+        try:
+            decision_data = json.loads(content)
+        except json.JSONDecodeError:
+            # Try to extract JSON from text
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                decision_data = json.loads(json_match.group())
+            else:
+                return fallback_decision(token_data)
+        
+        return AIDecision(
+            symbol=symbol,
+            action=decision_data.get('action', 'HOLD'),
+            confidence=float(decision_data.get('confidence', 50)),
+            reasoning=decision_data.get('reasoning', 'No reasoning provided'),
+            price=token_data.get('price', 0),
+            target_price=decision_data.get('target_price'),
+            stop_loss=decision_data.get('stop_loss'),
+            data_used=token_data
         )
         
-        if response.status_code == 200:
-            content = response.json().get('content', [{}])[0].get('text', '{}')
-            # Parse JSON from response
-            try:
-                decision_data = json.loads(content)
-            except json.JSONDecodeError:
-                # Try to extract JSON from text
-                import re
-                json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                if json_match:
-                    decision_data = json.loads(json_match.group())
-                else:
-                    return fallback_decision(token_data)
-            
-            return AIDecision(
-                symbol=symbol,
-                action=decision_data.get('action', 'HOLD'),
-                confidence=float(decision_data.get('confidence', 50)),
-                reasoning=decision_data.get('reasoning', 'No reasoning provided'),
-                price=token_data.get('price', 0),
-                target_price=decision_data.get('target_price'),
-                stop_loss=decision_data.get('stop_loss'),
-                data_used=token_data
-            )
-        else:
-            print(f"Claude API error: {response.status_code} - {response.text}")
-            return fallback_decision(token_data)
-            
     except Exception as e:
-        print(f"Claude request error: {e}")
+        print(f"LLM request error: {e}")
         return fallback_decision(token_data)
 
 
@@ -276,24 +293,26 @@ def fallback_decision(token_data: Dict[str, Any]) -> AIDecision:
     )
 
 
-def analyze_token(symbol: str, profile: str = 'modere') -> AIDecision:
+def analyze_token(symbol: str, profile: str = 'modere', 
+                  provider: str = 'anthropic', model: str = None) -> AIDecision:
     """Main function: fetch data and get AI decision"""
     # 1. Fetch all data
     data = fetch_token_data(symbol)
     
     # 2. Get AI decision
-    decision = ask_claude_decision(data, profile)
+    decision = ask_llm_decision(data, profile, provider, model)
     
     return decision
 
 
-def analyze_multiple_tokens(symbols: List[str], profile: str = 'modere') -> List[AIDecision]:
+def analyze_multiple_tokens(symbols: List[str], profile: str = 'modere',
+                           provider: str = 'anthropic', model: str = None) -> List[AIDecision]:
     """Analyze multiple tokens"""
     import time
     decisions = []
     
     for symbol in symbols:
-        decision = analyze_token(symbol, profile)
+        decision = analyze_token(symbol, profile, provider, model)
         decisions.append(decision)
         time.sleep(0.5)  # Rate limiting
     
