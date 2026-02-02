@@ -497,6 +497,31 @@ class Database:
                 WHERE created_at < datetime('now', ?)
             ''', (f'-{days} days',))
     
+    # ========== PAPER TRADING ==========
+    
+    def get_paper_trades(self) -> List[Dict[str, Any]]:
+        """Get paper trades from simulation.json"""
+        sim_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'simulation.json')
+        try:
+            if os.path.exists(sim_path):
+                with open(sim_path, 'r') as f:
+                    data = json.load(f)
+                return data.get('trades', [])
+        except (json.JSONDecodeError, IOError):
+            pass
+        return []
+    
+    def get_paper_portfolio(self) -> Dict[str, Any]:
+        """Get full paper trading portfolio from simulation.json"""
+        sim_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'simulation.json')
+        try:
+            if os.path.exists(sim_path):
+                with open(sim_path, 'r') as f:
+                    return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+        return {'balance_usd': 10000, 'positions': {}, 'trades': []}
+    
     # ========== STATS ==========
     
     def get_portfolio_stats(self) -> Dict[str, Any]:

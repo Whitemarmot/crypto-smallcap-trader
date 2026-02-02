@@ -146,7 +146,7 @@ def get_price(symbol: str) -> float:
 
 
 def check_positions_for_sell(sim, fg_val):
-    """Check existing positions for take profit or stop loss"""
+    """Check existing positions for take profit or stop loss (using AI levels)"""
     sells = []
     for symbol, pos in list(sim.get('positions', {}).items()):
         current_price = get_price(symbol)
@@ -159,27 +159,56 @@ def check_positions_for_sell(sim, fg_val):
         
         pnl_pct = ((current_price / avg_price) - 1) * 100
         
-        # Take profit
-        if pnl_pct >= TAKE_PROFIT_PCT:
+        # Get AI-defined levels or use defaults
+        stop_loss = pos.get('stop_loss')
+        tp1 = pos.get('tp1')
+        tp2 = pos.get('tp2')
+        
+        # Stop loss hit
+        if stop_loss and current_price <= stop_loss:
             sells.append({
                 'symbol': symbol,
-                'reason': f'take_profit ({pnl_pct:.1f}%)',
+                'reason': f'🛑 stop_loss @ ${stop_loss:.4f} ({pnl_pct:.1f}%)',
                 'price': current_price,
                 'pnl_pct': pnl_pct
             })
-        # Stop loss
-        elif pnl_pct <= STOP_LOSS_PCT:
+        # TP2 hit (full exit)
+        elif tp2 and current_price >= tp2:
             sells.append({
                 'symbol': symbol,
-                'reason': f'stop_loss ({pnl_pct:.1f}%)',
+                'reason': f'🎯 tp2 @ ${tp2:.4f} ({pnl_pct:.1f}%)',
                 'price': current_price,
                 'pnl_pct': pnl_pct
             })
+        # TP1 hit (partial exit - TODO: implement partial sells)
+        elif tp1 and current_price >= tp1:
+            sells.append({
+                'symbol': symbol,
+                'reason': f'🎯 tp1 @ ${tp1:.4f} ({pnl_pct:.1f}%)',
+                'price': current_price,
+                'pnl_pct': pnl_pct
+            })
+        # Fallback: percentage-based (if no AI levels)
+        elif not stop_loss and not tp1:
+            if pnl_pct >= TAKE_PROFIT_PCT:
+                sells.append({
+                    'symbol': symbol,
+                    'reason': f'take_profit ({pnl_pct:.1f}%)',
+                    'price': current_price,
+                    'pnl_pct': pnl_pct
+                })
+            elif pnl_pct <= STOP_LOSS_PCT:
+                sells.append({
+                    'symbol': symbol,
+                    'reason': f'stop_loss ({pnl_pct:.1f}%)',
+                    'price': current_price,
+                    'pnl_pct': pnl_pct
+                })
         # Extreme fear + loss = cut
-        elif fg_val < 20 and pnl_pct < -5:
+        if fg_val < 20 and pnl_pct < -5 and symbol not in [s['symbol'] for s in sells]:
             sells.append({
                 'symbol': symbol,
-                'reason': f'extreme_fear_exit ({pnl_pct:.1f}%)',
+                'reason': f'😰 extreme_fear_exit ({pnl_pct:.1f}%)',
                 'price': current_price,
                 'pnl_pct': pnl_pct
             })
@@ -187,8 +216,8 @@ def check_positions_for_sell(sim, fg_val):
     return sells
 
 
-def execute_buy(sim, symbol, amount_usd, price):
-    """Execute a BUY trade"""
+def execute_buy(sim, symbol, amount_usd, price, stop_loss=None, tp1=None, tp2=None):
+    """Execute a BUY trade with TP/SL levels"""
     ts = datetime.now().isoformat()
     if sim['portfolio'].get('USD', 0) < amount_usd or price <= 0:
         return False
@@ -200,13 +229,22 @@ def execute_buy(sim, symbol, amount_usd, price):
         p = sim['positions'][symbol]
         total = p['amount'] + qty
         new_avg = ((p['amount'] * p['avg_price']) + amount_usd) / total
-        sim['positions'][symbol] = {'amount': total, 'avg_price': new_avg}
+        sim['positions'][symbol] = {
+            'amount': total, 'avg_price': new_avg,
+            'stop_loss': stop_loss or p.get('stop_loss'),
+            'tp1': tp1 or p.get('tp1'),
+            'tp2': tp2 or p.get('tp2')
+        }
     else:
-        sim['positions'][symbol] = {'amount': qty, 'avg_price': price}
+        sim['positions'][symbol] = {
+            'amount': qty, 'avg_price': price,
+            'stop_loss': stop_loss, 'tp1': tp1, 'tp2': tp2
+        }
     
     sim['history'].append({
         'ts': ts, 'action': 'BUY', 'symbol': symbol,
-        'qty': qty, 'price': price, 'usd': amount_usd, 'auto': True
+        'qty': qty, 'price': price, 'usd': amount_usd, 'auto': True,
+        'stop_loss': stop_loss, 'tp1': tp1, 'tp2': tp2
     })
     return True
 
@@ -307,7 +345,7 @@ def run_bot():
                     for t in tokens[:15]
                 ])
                 
-                prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions.
+                prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions de trading.
 
 MARCHÉ: Fear & Greed = {fg_val}/100
 CHAIN: {chain}
@@ -317,11 +355,15 @@ TOKENS:
 {token_list}
 
 INSTRUCTIONS:
-- Donne des décisions BUY pour les meilleurs (max 3)
+- Analyse chaque token et donne des décisions BUY pour les meilleurs (max 3)
+- Pour chaque BUY, donne les niveaux de sortie:
+  • stop_loss: prix de vente si ça baisse (protection)
+  • tp1: premier take profit (sortie partielle recommandée)
+  • tp2: second take profit (objectif optimiste)
 - Confidence doit être >= {profile.min_score}
 
 Réponds UNIQUEMENT avec un JSON array:
-[{{"symbol": "XXX", "action": "BUY", "confidence": 75, "reason": "..."}}]
+[{{"symbol": "XXX", "action": "BUY", "confidence": 75, "stop_loss": 0.0045, "tp1": 0.0058, "tp2": 0.0072, "reason": "..."}}]
 
 Si rien d'intéressant: []
 """
@@ -350,13 +392,17 @@ Si rien d'intéressant: []
                         act = d.get('action', 'HOLD')
                         conf = d.get('confidence', 0)
                         reason = d.get('reason', '')
+                        stop_loss = d.get('stop_loss')
+                        tp1 = d.get('tp1')
+                        tp2 = d.get('tp2')
                         
                         if act == 'BUY' and conf >= profile.min_score:
                             price = get_price(sym)
                             amount = usd * (profile.trade_amount_pct / 100)
                             if amount >= 10 and price > 0:
-                                if execute_buy(sim, sym, amount, price):
-                                    log(f"🟢 BUY {sym} @ ${price:.4f} ({conf}%): {reason}", "INFO", d)
+                                if execute_buy(sim, sym, amount, price, stop_loss, tp1, tp2):
+                                    levels = f"SL:${stop_loss:.4f} TP1:${tp1:.4f} TP2:${tp2:.4f}" if stop_loss else ""
+                                    log(f"🟢 BUY {sym} @ ${price:.4f} ({conf}%) {levels}: {reason}", "INFO", d)
                                     executed.append(f"BUY:{sym}")
                                     usd -= amount
                 else:
