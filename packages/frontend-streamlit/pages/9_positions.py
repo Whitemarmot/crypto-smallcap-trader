@@ -12,7 +12,9 @@ import requests
 from datetime import datetime
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
-SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')
+WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
+WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
+SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')  # Legacy fallback
 HISTORY_PATH = os.path.join(DATA_DIR, 'position_history.json')
 CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
 CMC_API_KEY = '849ddcc694a049708d0b5392486d6eaa'
@@ -47,9 +49,9 @@ def get_current_price(symbol):
         st.error(f"Erreur prix {symbol}: {e}")
     return 0
 
-def close_position(symbol, reason="manual_close"):
+def close_position(symbol, wallet_path, reason="manual_close"):
     """Close a position at current market price"""
-    sim = load_json(SIM_PATH, {})
+    sim = load_json(wallet_path, {})
     
     if symbol not in sim.get('positions', {}):
         return False, f"Position {symbol} non trouvée"
@@ -122,7 +124,7 @@ def close_position(symbol, reason="manual_close"):
     })
     
     # Save
-    save_json(SIM_PATH, sim)
+    save_json(wallet_path, sim)
     
     pnl_emoji = "🟢" if pnl_usd >= 0 else "🔴"
     return True, f"{pnl_emoji} {symbol} vendu @ ${price:.6f} | P&L: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
@@ -130,13 +132,41 @@ def close_position(symbol, reason="manual_close"):
 st.set_page_config(page_title="📊 Positions", layout="wide")
 st.title("📊 Suivi des Positions")
 
-# Load data
-sim = load_json(SIM_PATH, {})
+# Load wallets config
+wallets_config = load_json(WALLETS_CONFIG, {'wallets': [], 'active_wallet': 'simulation'})
+wallets = {w['id']: w for w in wallets_config.get('wallets', [])}
+active_wallet_id = wallets_config.get('active_wallet', 'simulation')
+
+# Sidebar: Wallet selector
+st.sidebar.header("💼 Wallet")
+wallet_options = {w['id']: w['name'] for w in wallets_config.get('wallets', [])}
+if wallet_options:
+    selected_wallet_id = st.sidebar.selectbox(
+        "Wallet actif",
+        options=list(wallet_options.keys()),
+        format_func=lambda x: wallet_options[x],
+        index=list(wallet_options.keys()).index(active_wallet_id) if active_wallet_id in wallet_options else 0
+    )
+else:
+    selected_wallet_id = 'simulation'
+
+# Load wallet data
+wallet_path = os.path.join(WALLETS_DIR, f'{selected_wallet_id}.json')
+if os.path.exists(wallet_path):
+    sim = load_json(wallet_path, {})
+else:
+    sim = load_json(SIM_PATH, {})  # Legacy fallback
+
 history = load_json(HISTORY_PATH, {'snapshots': {}})
-config = load_json(CONFIG_PATH, {})
+
+# Get wallet-specific config
+wallet_cfg = wallets.get(selected_wallet_id, {})
+max_positions = wallet_cfg.get('max_positions', 10)
+position_size_pct = wallet_cfg.get('position_size_pct', 5)
+stop_loss_pct = wallet_cfg.get('stop_loss_pct', 15)
+take_profit_pct = wallet_cfg.get('take_profit_pct', 20)
 
 positions = sim.get('positions', {})
-max_positions = config.get('max_positions', 10)
 
 # Header stats
 col1, col2, col3, col4 = st.columns(4)
@@ -154,19 +184,34 @@ with col4:
 
 st.divider()
 
+# Sidebar: Wallet configuration
+st.sidebar.header("⚙️ Config Wallet")
+new_max = st.sidebar.number_input("Max positions", min_value=1, max_value=20, value=max_positions, key="max_pos")
+new_size = st.sidebar.number_input("Taille position (%)", min_value=1, max_value=25, value=position_size_pct, key="pos_size")
+new_sl = st.sidebar.number_input("Stop Loss (%)", min_value=5, max_value=50, value=stop_loss_pct, key="sl")
+new_tp = st.sidebar.number_input("Take Profit (%)", min_value=5, max_value=100, value=take_profit_pct, key="tp")
+
+# Check for changes
+config_changed = (new_max != max_positions or new_size != position_size_pct or 
+                  new_sl != stop_loss_pct or new_tp != take_profit_pct)
+
+if config_changed:
+    if st.sidebar.button("💾 Sauvegarder"):
+        # Update wallet config
+        for w in wallets_config['wallets']:
+            if w['id'] == selected_wallet_id:
+                w['max_positions'] = new_max
+                w['position_size_pct'] = new_size
+                w['stop_loss_pct'] = new_sl
+                w['take_profit_pct'] = new_tp
+                w['updated_at'] = datetime.now().isoformat()
+                break
+        save_json(WALLETS_CONFIG, wallets_config)
+        st.sidebar.success("✅ Config sauvegardée!")
+        st.rerun()
+
 if not positions:
     st.info("🔹 Aucune position ouverte. Le bot va en créer lors de sa prochaine exécution.")
-else:
-    # Config: max positions
-    st.sidebar.header("⚙️ Configuration")
-    new_max = st.sidebar.number_input("Max positions", min_value=1, max_value=20, value=max_positions)
-    if new_max != max_positions:
-        config['max_positions'] = new_max
-        config['updated_at'] = datetime.now().isoformat()
-        with open(CONFIG_PATH, 'w') as f:
-            json.dump(config, f, indent=2)
-        st.sidebar.success(f"✅ Max positions: {new_max}")
-        st.rerun()
     
     # Position cards
     st.subheader("📈 Positions actuelles")
@@ -217,7 +262,7 @@ else:
                 col_yes, col_no = st.columns(2)
                 with col_yes:
                     if st.button("✅ Oui", key=f"yes_{symbol}"):
-                        success, msg = close_position(symbol, reason="manual_close")
+                        success, msg = close_position(symbol, wallet_path, reason="manual_close")
                         if success:
                             st.success(msg)
                             st.session_state.confirm_close = None
