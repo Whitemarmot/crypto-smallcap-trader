@@ -55,6 +55,28 @@ ONEINCH_API_KEY = os.environ.get('ONEINCH_API_KEY', '')
 # Slippage tolerance (1% default)
 DEFAULT_SLIPPAGE = 1
 
+# Gas reserve - always keep this amount of native token for gas
+GAS_RESERVE_ETH = 0.005  # ~$15-20 at current prices
+GAS_RESERVE_WEI = int(GAS_RESERVE_ETH * 1e18)
+
+
+def get_gas_balance(chain: str, wallet_address: str) -> Tuple[float, bool]:
+    """
+    Get gas balance and check if sufficient
+    
+    Returns:
+        (balance_eth, has_enough_gas)
+    """
+    try:
+        w3 = get_web3(chain)
+        balance = w3.eth.get_balance(wallet_address)
+        balance_eth = balance / 1e18
+        has_enough = balance >= GAS_RESERVE_WEI
+        return balance_eth, has_enough
+    except Exception as e:
+        print(f"❌ Error checking gas balance: {e}")
+        return 0, False
+
 
 def get_web3(chain: str) -> Web3:
     """Get Web3 instance for a chain"""
@@ -226,10 +248,20 @@ def execute_swap(
     except Exception as e:
         return False, f"❌ Failed to connect to {chain}: {e}", None
     
-    # Check balance
+    # Check gas balance
     balance = w3.eth.get_balance(wallet_address)
     if balance == 0:
         return False, "❌ Wallet has no ETH for gas", None
+    
+    if balance < GAS_RESERVE_WEI:
+        return False, f"❌ Insufficient gas reserve. Have {balance/1e18:.4f} ETH, need {GAS_RESERVE_ETH} ETH minimum", None
+    
+    # Estimate gas cost
+    gas_price = w3.eth.gas_price
+    estimated_gas_cost = gas_price * 500000  # ~500k gas for swap
+    
+    if balance - estimated_gas_cost < GAS_RESERVE_WEI:
+        return False, f"❌ Gas reserve too low after tx. Have {balance/1e18:.4f} ETH, need ~{(estimated_gas_cost + GAS_RESERVE_WEI)/1e18:.4f} ETH", None
     
     # Get swap transaction
     swap_data = get_swap_tx(chain, from_token, to_token, amount_wei, wallet_address, slippage)
