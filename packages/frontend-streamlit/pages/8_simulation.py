@@ -29,12 +29,14 @@ try:
         get_google_trends,
         get_cryptopanic_sentiment
     )
-    from utils.config import load_config
-    from analyzer import analyze_token, TradingAction
+    from utils.config import load_config, AI_PROFILES
+    from utils.ai_agent import analyze_token as ai_analyze_token, analyze_multiple_tokens
     import requests
     MODULES_OK = True
+    AI_AGENT_OK = True
 except ImportError as e:
     MODULES_OK = False
+    AI_AGENT_OK = False
     st.error(f"❌ Module error: {e}")
     st.stop()
 
@@ -313,10 +315,23 @@ with tab2:
         fg_color = "#ff4444" if fg.value <= 25 else "#ff8844" if fg.value <= 45 else "#ffff44" if fg.value <= 55 else "#88ff44"
         st.markdown(f"😱 **Fear & Greed:** {fg.value} ({fg.classification})")
     
+    # AI Profile selector
+    profile_col1, profile_col2 = st.columns([2, 1])
+    with profile_col1:
+        selected_profile = st.selectbox(
+            "🤖 Profil IA pour l'analyse",
+            options=list(AI_PROFILES.keys()),
+            format_func=lambda x: AI_PROFILES[x].name,
+            index=1  # Default: modere
+        )
+    with profile_col2:
+        profile_info = AI_PROFILES[selected_profile]
+        st.caption(f"Score min: {profile_info.min_score} | Trade: {profile_info.trade_amount_pct}%")
+    
     # Analyze trending tokens
-    if st.button("🚀 Analyser et Trader", type="primary", use_container_width=True):
+    if st.button("🚀 Analyser et Trader (IA)", type="primary", use_container_width=True):
         
-        with st.spinner("Récupération des tokens..."):
+        with st.spinner("Récupération des tokens trending..."):
             trending = get_trending_tokens()
         
         if not trending:
@@ -326,46 +341,26 @@ with tab2:
             executed_trades = []
             progress = st.progress(0)
             
+            symbols = [t.symbol for t in trending[:10]]
+            
             for i, token in enumerate(trending[:10]):
-                progress.progress((i + 1) / 10, text=f"Analyse {token.symbol}...")
+                progress.progress((i + 1) / 10, text=f"🧠 IA analyse {token.symbol}...")
                 
-                # Get price
-                price = get_token_price(token.symbol)
-                if price <= 0:
+                # Use AI Agent for decision
+                ai_decision = ai_analyze_token(token.symbol, selected_profile)
+                
+                if not ai_decision or not ai_decision.price:
                     continue
                 
-                # Simple scoring based on Fear & Greed
-                # In extreme fear, we want to buy. In extreme greed, we want to sell.
-                score = 50
-                
-                if fg_value <= 25:  # Extreme fear = buy opportunity
-                    score = 70 + (25 - fg_value)
-                    action = "BUY"
-                    reason = f"Extreme Fear ({fg_value}) = opportunité d'achat"
-                elif fg_value <= 40:  # Fear = moderate buy
-                    score = 60 + (40 - fg_value)
-                    action = "BUY"
-                    reason = f"Fear ({fg_value}) = bon point d'entrée"
-                elif fg_value >= 75:  # Extreme greed = sell
-                    score = 30 - (fg_value - 75)
-                    action = "SELL"
-                    reason = f"Extreme Greed ({fg_value}) = prendre profits"
-                elif fg_value >= 60:  # Greed = moderate sell
-                    score = 40 - (fg_value - 60)
-                    action = "SELL" 
-                    reason = f"Greed ({fg_value}) = réduire exposition"
-                else:
-                    action = "HOLD"
-                    score = 50
-                    reason = "Marché neutre"
-                
                 decision = {
-                    'symbol': token.symbol,
+                    'symbol': ai_decision.symbol,
                     'name': token.name,
-                    'price': price,
-                    'action': action,
-                    'score': score,
-                    'reason': reason,
+                    'price': ai_decision.price,
+                    'action': ai_decision.action,
+                    'score': ai_decision.confidence,
+                    'reason': ai_decision.reasoning,
+                    'target_price': ai_decision.target_price,
+                    'stop_loss': ai_decision.stop_loss,
                     'executed': False
                 }
                 
