@@ -2,6 +2,7 @@
 """
 🎯 Execute Trades from Jean-Michel's Decisions
 Takes JSON input with trade decisions and executes them.
+Supports both paper trading (simulation) and real trading via 1inch.
 """
 
 import json
@@ -14,7 +15,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.social_signals import get_tokens_by_market_cap_cmc
 
+# Real trading imports
+try:
+    from utils.real_trader import buy_token, sell_token, get_quote
+    from utils.wallet_keys import has_private_key
+    REAL_TRADING_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ Real trading not available: {e}", file=sys.stderr)
+    REAL_TRADING_AVAILABLE = False
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
+WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
 SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')
 
 def load_json(path, default):
@@ -186,10 +198,76 @@ def execute_sell(sim, symbol, price, reason=""):
     pnl_emoji = "🟢" if pnl_usd >= 0 else "🔴"
     return True, f"Sold {qty:.4f} {symbol} @ ${price:.6f} = ${exit_value:.2f} | P&L: {pnl_emoji} ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
 
+def get_wallet_config(wallet_id: str) -> dict:
+    """Get wallet configuration"""
+    config = load_json(WALLETS_CONFIG, {'wallets': []})
+    for w in config.get('wallets', []):
+        if w['id'] == wallet_id:
+            return w
+    return {}
+
+
+def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_usd: float) -> tuple:
+    """Execute a real buy via 1inch"""
+    if not REAL_TRADING_AVAILABLE:
+        return False, "Real trading module not available"
+    
+    address = wallet_cfg.get('address', '')
+    chain = wallet_cfg.get('chain', 'base')
+    
+    if not address:
+        return False, "Wallet has no address"
+    
+    if not has_private_key(address):
+        return False, "No private key stored for this wallet"
+    
+    success, msg, tx_hash = buy_token(
+        chain=chain,
+        wallet_address=address,
+        token_symbol=symbol,
+        token_address=token_address,
+        amount_usd=amount_usd,
+    )
+    
+    if tx_hash:
+        msg += f" (tx: {tx_hash})"
+    
+    return success, msg
+
+
+def execute_real_sell(wallet_cfg: dict, symbol: str, token_address: str, amount: float) -> tuple:
+    """Execute a real sell via 1inch"""
+    if not REAL_TRADING_AVAILABLE:
+        return False, "Real trading module not available"
+    
+    address = wallet_cfg.get('address', '')
+    chain = wallet_cfg.get('chain', 'base')
+    
+    if not address:
+        return False, "Wallet has no address"
+    
+    if not has_private_key(address):
+        return False, "No private key stored for this wallet"
+    
+    success, msg, tx_hash = sell_token(
+        chain=chain,
+        wallet_address=address,
+        token_symbol=symbol,
+        token_address=token_address,
+        amount=amount,
+    )
+    
+    if tx_hash:
+        msg += f" (tx: {tx_hash})"
+    
+    return success, msg
+
+
 def main():
     parser = argparse.ArgumentParser(description='Execute trades from JSON decisions')
     parser.add_argument('--decisions', type=str, help='JSON string with decisions')
     parser.add_argument('--file', type=str, help='JSON file with decisions')
+    parser.add_argument('--wallet', type=str, default='simulation', help='Wallet ID to use')
     args = parser.parse_args()
     
     # Get decisions
@@ -205,8 +283,19 @@ def main():
         print(json.dumps({'status': 'ok', 'message': 'No decisions to execute', 'executed': []}))
         return
     
-    # Load simulation
-    sim = load_json(SIM_PATH, {'portfolio': {'USDC': 10000}, 'positions': {}, 'history': []})
+    # Get wallet config
+    wallet_cfg = get_wallet_config(args.wallet)
+    wallet_type = wallet_cfg.get('type', 'paper')
+    is_real = wallet_type == 'real'
+    
+    # Load wallet data
+    wallet_path = os.path.join(WALLETS_DIR, f'{args.wallet}.json')
+    if not os.path.exists(wallet_path):
+        wallet_path = SIM_PATH  # Fallback
+    
+    sim = load_json(wallet_path, {'portfolio': {'USDC': 10000}, 'positions': {}, 'history': []})
+    
+    print(f"🎯 Executing trades for wallet: {args.wallet} ({'REAL' if is_real else 'PAPER'})", file=sys.stderr)
     
     # Get current prices
     tokens = get_tokens_by_market_cap_cmc(0, float('inf'), limit=200)
@@ -217,6 +306,7 @@ def main():
     for d in decisions:
         action = d.get('action', '').upper()
         symbol = d.get('symbol', '').upper()
+        token_address = d.get('token_address', '')  # For real trading
         
         if not symbol:
             continue
@@ -232,7 +322,16 @@ def main():
             tp1 = d.get('tp1')
             tp2 = d.get('tp2')
             
-            success, msg = execute_buy(sim, symbol, usd, price, stop_loss, tp1, tp2)
+            if is_real and token_address:
+                # Real trading
+                success, msg = execute_real_buy(wallet_cfg, symbol, token_address, usd)
+                if success:
+                    # Also update local tracking
+                    execute_buy(sim, symbol, usd, price, stop_loss, tp1, tp2)
+            else:
+                # Paper trading
+                success, msg = execute_buy(sim, symbol, usd, price, stop_loss, tp1, tp2)
+            
             if success:
                 executed.append({
                     'action': 'BUY',
@@ -242,25 +341,46 @@ def main():
                     'stop_loss': stop_loss,
                     'tp1': tp1,
                     'tp2': tp2,
+                    'real': is_real,
                 })
+                print(f"✅ BUY {symbol}: {msg}", file=sys.stderr)
             else:
                 errors.append(f"BUY {symbol}: {msg}")
+                print(f"❌ BUY {symbol}: {msg}", file=sys.stderr)
         
         elif action == 'SELL':
             reason = d.get('reason', '')
-            success, msg = execute_sell(sim, symbol, price, reason)
+            
+            if is_real and token_address:
+                # Real trading - get amount from position
+                pos = sim.get('positions', {}).get(symbol, {})
+                amount = pos.get('amount', 0)
+                if amount > 0:
+                    success, msg = execute_real_sell(wallet_cfg, symbol, token_address, amount)
+                    if success:
+                        # Also update local tracking
+                        execute_sell(sim, symbol, price, reason)
+                else:
+                    success, msg = False, "No position to sell"
+            else:
+                # Paper trading
+                success, msg = execute_sell(sim, symbol, price, reason)
+            
             if success:
                 executed.append({
                     'action': 'SELL',
                     'symbol': symbol,
                     'price': price,
                     'reason': reason,
+                    'real': is_real,
                 })
+                print(f"✅ SELL {symbol}: {msg}", file=sys.stderr)
             else:
                 errors.append(f"SELL {symbol}: {msg}")
+                print(f"❌ SELL {symbol}: {msg}", file=sys.stderr)
     
-    # Save
-    save_json(SIM_PATH, sim)
+    # Save wallet data
+    save_json(wallet_path, sim)
     
     # Output result
     result = {
