@@ -263,8 +263,27 @@ else:
             current_value = amount * current_price
             pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
             
+            # Format entry date
+            entry_date = pos.get('entry_date', '')
+            entry_str = ""
+            holding_str = ""
+            if entry_date:
+                try:
+                    entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
+                    entry_str = entry_dt.strftime('%d/%m %H:%M')
+                    holding_hours = (datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600
+                    if holding_hours < 1:
+                        holding_str = f"{int(holding_hours * 60)}min"
+                    elif holding_hours < 24:
+                        holding_str = f"{holding_hours:.1f}h"
+                    else:
+                        holding_str = f"{holding_hours / 24:.1f}j"
+                except:
+                    entry_str = entry_date[:16]
+            
             st.markdown(f"""
             **{symbol}** {pnl_emoji} {pnl_pct:+.2f}%
+            - 📅 Entrée: `{entry_str}` ({holding_str})
             - Quantité: `{amount:,.4f}`
             - Prix moyen: `${avg_price:.6f}`
             - Prix actuel: `${current_price:.6f}`
