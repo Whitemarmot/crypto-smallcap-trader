@@ -11,13 +11,18 @@ import os
 import requests
 from datetime import datetime
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
 WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
 SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')  # Legacy fallback
 HISTORY_PATH = os.path.join(DATA_DIR, 'position_history.json')
 CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
 CMC_API_KEY = '849ddcc694a049708d0b5392486d6eaa'
+
+# Debug paths on load
+import sys
+print(f"[DEBUG] DATA_DIR: {DATA_DIR}", file=sys.stderr)
+print(f"[DEBUG] WALLETS_CONFIG exists: {os.path.exists(WALLETS_CONFIG)}", file=sys.stderr)
 
 def load_json(path, default):
     try:
@@ -139,23 +144,43 @@ active_wallet_id = wallets_config.get('active_wallet', 'simulation')
 
 # Sidebar: Wallet selector
 st.sidebar.header("💼 Wallet")
-wallet_options = {w['id']: w['name'] for w in wallets_config.get('wallets', [])}
-if wallet_options:
+wallet_list = wallets_config.get('wallets', [])
+
+if wallet_list:
+    wallet_options = {w['id']: w['name'] for w in wallet_list}
+    wallet_ids = list(wallet_options.keys())
+    
+    # Find index of active wallet
+    try:
+        default_idx = wallet_ids.index(active_wallet_id)
+    except ValueError:
+        default_idx = 0
+    
     selected_wallet_id = st.sidebar.selectbox(
         "Wallet actif",
-        options=list(wallet_options.keys()),
-        format_func=lambda x: wallet_options[x],
-        index=list(wallet_options.keys()).index(active_wallet_id) if active_wallet_id in wallet_options else 0
+        options=wallet_ids,
+        format_func=lambda x: wallet_options.get(x, x),
+        index=default_idx
     )
 else:
     selected_wallet_id = 'simulation'
+    st.sidebar.info("Aucun wallet configuré")
 
-# Load wallet data
+# Load wallet data - try multiple paths
 wallet_path = os.path.join(WALLETS_DIR, f'{selected_wallet_id}.json')
+sim = None
+
+# Try wallet path first
 if os.path.exists(wallet_path):
-    sim = load_json(wallet_path, {})
-else:
-    sim = load_json(SIM_PATH, {})  # Legacy fallback
+    sim = load_json(wallet_path, None)
+
+# Fallback to legacy path
+if not sim and os.path.exists(SIM_PATH):
+    sim = load_json(SIM_PATH, None)
+
+# Default empty
+if not sim:
+    sim = {'portfolio': {'USDC': 0}, 'positions': {}, 'history': []}
 
 history = load_json(HISTORY_PATH, {'snapshots': {}})
 
