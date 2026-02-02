@@ -40,7 +40,7 @@ STOP_LOSS_PCT = -15     # -15% = vendre (fallback)
 POSITION_UNIT_PCT = 5       # 1 position = 5% du portfolio
 MAX_POSITION_UNITS = 2      # Max 2 positions (10%) par token
 MAX_TOTAL_EXPOSURE_PCT = 80 # Max 80% investi (garder 20% cash)
-MIN_TRADE_USD = 10          # Minimum $10 par trade
+MIN_TRADE_USDC = 10          # Minimum $10 par trade
 
 MCAP_PRESETS = {
     'micro': {'min': 0, 'max': 1_000_000},
@@ -164,12 +164,12 @@ def get_price(symbol: str, tokens_data: list = None) -> float:
         resp = requests.get(
             'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest',
             headers={'X-CMC_PRO_API_KEY': cmc_key},
-            params={'symbol': symbol, 'convert': 'USD'},
+            params={'symbol': symbol, 'convert': 'USDC'},
             timeout=10
         )
         data = resp.json()
         if 'data' in data and symbol in data['data']:
-            price = data['data'][symbol]['quote']['USD']['price']
+            price = data['data'][symbol]['quote']['USDC']['price']
             if price and price > 0:
                 PRICE_CACHE[symbol] = {'price': price, 'ts': time.time()}
                 return price
@@ -204,7 +204,7 @@ def get_price(symbol: str, tokens_data: list = None) -> float:
 
 def calculate_portfolio_value(sim, tokens_data: list = None) -> dict:
     """Calculate total portfolio value"""
-    usd = sim['portfolio'].get('USD', 0)
+    usd = sim['portfolio'].get('USDC', 0)
     positions_value = 0
     position_details = {}
     
@@ -370,11 +370,11 @@ def check_positions_for_sell(sim, fg_val, tokens_data: list = None):
 def execute_buy(sim, symbol, amount_usd, price, stop_loss=None, tp1=None, tp2=None):
     """Execute a BUY trade with TP/SL levels"""
     ts = datetime.now().isoformat()
-    if sim['portfolio'].get('USD', 0) < amount_usd or price <= 0:
-        log(f"❌ Cannot buy {symbol}: USD={sim['portfolio'].get('USD',0):.2f}, price={price}", "WARN")
+    if sim['portfolio'].get('USDC', 0) < amount_usd or price <= 0:
+        log(f"❌ Cannot buy {symbol}: USDC={sim['portfolio'].get('USDC',0):.2f}, price={price}", "WARN")
         return False
     
-    sim['portfolio']['USD'] -= amount_usd
+    sim['portfolio']['USDC'] -= amount_usd
     qty = amount_usd / price
     
     if symbol in sim['positions']:
@@ -418,7 +418,7 @@ def execute_sell(sim, symbol, price, reason):
     usd_value = qty * price
     pnl = (price - pos['avg_price']) * qty
     
-    sim['portfolio']['USD'] += usd_value
+    sim['portfolio']['USDC'] += usd_value
     del sim['positions'][symbol]
     
     sim['history'].append({
@@ -469,7 +469,7 @@ def run_bot():
         log(f"Config: {mcap_key}/{chain}/{profile_key}/{provider}")
         
         # Load simulation
-        sim = load_json(SIM_DB_PATH, {'portfolio': {'USD': 10000}, 'positions': {}, 'history': []})
+        sim = load_json(SIM_DB_PATH, {'portfolio': {'USDC': 10000}, 'positions': {}, 'history': []})
         
         # Get tokens early to use for price lookups (fetch more for better analysis)
         tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=200)
@@ -508,7 +508,7 @@ def run_bot():
         portfolio = calculate_portfolio_value(sim, tokens)
         
         # === BUY LOGIC ===
-        if portfolio['cash'] < MIN_TRADE_USD:
+        if portfolio['cash'] < MIN_TRADE_USDC:
             log(f"Low cash (${portfolio['cash']:.2f}), skipping buys", "INFO")
         elif portfolio['exposure_pct'] >= MAX_TOTAL_EXPOSURE_PCT:
             log(f"Max exposure reached ({portfolio['exposure_pct']:.1f}%), skipping buys", "INFO")
@@ -637,7 +637,7 @@ Si aucune opportunité intéressante après analyse: `[]`
                             
                             log(f"💰 Position sizing: {pos_sizing['units_label']} ({pos_sizing['units']:.2f} units) = ${amount:.2f} (1 pos = ${pos_sizing['one_position_usd']:.2f})")
                             
-                            if amount >= MIN_TRADE_USD and pos_sizing['units'] > 0:
+                            if amount >= MIN_TRADE_USDC and pos_sizing['units'] > 0:
                                 if execute_buy(sim, sym, amount, price, stop_loss, tp1, tp2):
                                     levels = ""
                                     if stop_loss:

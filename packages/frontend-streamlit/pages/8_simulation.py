@@ -62,7 +62,7 @@ def load_sim():
     if os.path.exists(SIM_DB_PATH):
         with open(SIM_DB_PATH, 'r') as f:
             return json.load(f)
-    return {'portfolio': {'USD': 10000}, 'positions': {}, 'history': []}
+    return {'portfolio': {'USDC': 10000}, 'positions': {}, 'history': []}
 
 
 def save_sim(data):
@@ -132,8 +132,8 @@ def get_price(symbol: str) -> float:
 
 def trade(sim, action, symbol, amount_usd, price):
     ts = datetime.now().isoformat()
-    if action == 'BUY' and sim['portfolio'].get('USD', 0) >= amount_usd and price > 0:
-        sim['portfolio']['USD'] -= amount_usd
+    if action == 'BUY' and sim['portfolio'].get('USDC', 0) >= amount_usd and price > 0:
+        sim['portfolio']['USDC'] -= amount_usd
         qty = amount_usd / price
         if symbol in sim['positions']:
             p = sim['positions'][symbol]
@@ -147,7 +147,7 @@ def trade(sim, action, symbol, amount_usd, price):
         p = sim['positions'][symbol]
         val = p['amount'] * price
         pnl = (price - p['avg_price']) * p['amount']
-        sim['portfolio']['USD'] += val
+        sim['portfolio']['USDC'] += val
         del sim['positions'][symbol]
         sim['history'].append({'ts': ts, 'action': 'SELL', 'symbol': symbol, 'qty': p['amount'], 'price': price, 'pnl': pnl})
         return True
@@ -165,7 +165,7 @@ providers = get_available_providers()
 
 # Portfolio summary
 col1, col2, col3, col4 = st.columns(4)
-usd = sim['portfolio'].get('USD', 0)
+usd = sim['portfolio'].get('USDC', 0)
 pos_val = sum(p['amount'] * get_price(s) for s, p in sim['positions'].items())
 total = usd + pos_val
 
@@ -352,7 +352,7 @@ with st.expander("📜 Historique"):
 
 # Reset
 if st.button("🔄 Reset Simulation"):
-    save_sim({'portfolio': {'USD': 10000}, 'positions': {}, 'history': []})
+    save_sim({'portfolio': {'USDC': 10000}, 'positions': {}, 'history': []})
     st.rerun()
 
 # Info
