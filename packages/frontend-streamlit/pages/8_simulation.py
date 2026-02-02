@@ -289,7 +289,21 @@ with tab1:
 # ============ TAB 2: Auto-Decisions ============
 with tab2:
     st.subheader("🤖 Décisions Automatiques")
-    st.caption("L'IA analyse les tokens et propose des trades")
+    st.caption("L'IA analyse les tokens et exécute les trades automatiquement")
+    
+    # Settings row
+    settings_col1, settings_col2, settings_col3 = st.columns(3)
+    
+    with settings_col1:
+        auto_execute = st.toggle("⚡ Auto-exécuter les trades", value=True, help="Exécute automatiquement les BUY après analyse")
+    
+    with settings_col2:
+        trade_amount = st.number_input("💵 Montant par trade ($)", min_value=10, max_value=1000, value=100, step=10)
+    
+    with settings_col3:
+        min_score = st.number_input("🎯 Score minimum", min_value=50, max_value=90, value=65, step=5)
+    
+    st.markdown("---")
     
     # Current signals
     fg = get_fear_greed_index()
@@ -300,7 +314,7 @@ with tab2:
         st.markdown(f"😱 **Fear & Greed:** {fg.value} ({fg.classification})")
     
     # Analyze trending tokens
-    if st.button("🔍 Analyser les tokens trending", type="primary", use_container_width=True):
+    if st.button("🚀 Analyser et Trader", type="primary", use_container_width=True):
         
         with st.spinner("Récupération des tokens..."):
             trending = get_trending_tokens()
@@ -309,6 +323,7 @@ with tab2:
             st.warning("Impossible de charger les tokens trending")
         else:
             decisions = []
+            executed_trades = []
             progress = st.progress(0)
             
             for i, token in enumerate(trending[:10]):
@@ -327,55 +342,132 @@ with tab2:
                     score = 70 + (25 - fg_value)
                     action = "BUY"
                     reason = f"Extreme Fear ({fg_value}) = opportunité d'achat"
+                elif fg_value <= 40:  # Fear = moderate buy
+                    score = 60 + (40 - fg_value)
+                    action = "BUY"
+                    reason = f"Fear ({fg_value}) = bon point d'entrée"
                 elif fg_value >= 75:  # Extreme greed = sell
                     score = 30 - (fg_value - 75)
                     action = "SELL"
                     reason = f"Extreme Greed ({fg_value}) = prendre profits"
+                elif fg_value >= 60:  # Greed = moderate sell
+                    score = 40 - (fg_value - 60)
+                    action = "SELL" 
+                    reason = f"Greed ({fg_value}) = réduire exposition"
                 else:
                     action = "HOLD"
+                    score = 50
                     reason = "Marché neutre"
                 
-                decisions.append({
+                decision = {
                     'symbol': token.symbol,
                     'name': token.name,
                     'price': price,
                     'action': action,
                     'score': score,
-                    'reason': reason
-                })
+                    'reason': reason,
+                    'executed': False
+                }
+                
+                # Auto-execute if enabled and score is high enough
+                if auto_execute and action == "BUY" and score >= min_score:
+                    usd_available = sim_data['portfolio'].get('USD', 0)
+                    if usd_available >= trade_amount:
+                        result = execute_sim_trade(sim_data, 'BUY', token.symbol, trade_amount, price)
+                        if 'error' not in result:
+                            decision['executed'] = True
+                            executed_trades.append(token.symbol)
+                
+                # Auto-sell if we have position and signal is SELL
+                if auto_execute and action == "SELL" and token.symbol in sim_data['positions']:
+                    pos = sim_data['positions'][token.symbol]
+                    sell_value = pos['amount'] * price
+                    result = execute_sim_trade(sim_data, 'SELL', token.symbol, sell_value, price)
+                    if 'error' not in result:
+                        decision['executed'] = True
+                        executed_trades.append(f"SELL {token.symbol}")
+                
+                decisions.append(decision)
             
             progress.empty()
             
+            # Save if trades were executed
+            if executed_trades:
+                save_simulation_data(sim_data)
+                st.success(f"✅ {len(executed_trades)} trades exécutés: {', '.join(executed_trades)}")
+            
             # Store decisions
             st.session_state['sim_decisions'] = decisions
+    
+    # Quick action buttons
+    col_btn1, col_btn2 = st.columns(2)
+    
+    with col_btn1:
+        if st.button("📥 Exécuter tous les BUY", use_container_width=True):
+            if 'sim_decisions' in st.session_state:
+                executed = []
+                for d in st.session_state['sim_decisions']:
+                    if d['action'] == 'BUY' and d['score'] >= min_score and not d.get('executed'):
+                        usd_available = sim_data['portfolio'].get('USD', 0)
+                        if usd_available >= trade_amount:
+                            result = execute_sim_trade(sim_data, 'BUY', d['symbol'], trade_amount, d['price'])
+                            if 'error' not in result:
+                                executed.append(d['symbol'])
+                                d['executed'] = True
+                if executed:
+                    save_simulation_data(sim_data)
+                    st.success(f"✅ Acheté: {', '.join(executed)}")
+                    st.rerun()
+                else:
+                    st.warning("Aucun trade à exécuter (score trop bas ou pas assez d'USD)")
+    
+    with col_btn2:
+        if st.button("📤 Vendre toutes les positions", use_container_width=True):
+            if sim_data['positions']:
+                sold = []
+                for symbol, pos in list(sim_data['positions'].items()):
+                    price = get_token_price(symbol)
+                    if price > 0:
+                        sell_value = pos['amount'] * price
+                        result = execute_sim_trade(sim_data, 'SELL', symbol, sell_value, price)
+                        if 'error' not in result:
+                            sold.append(symbol)
+                if sold:
+                    save_simulation_data(sim_data)
+                    st.success(f"✅ Vendu: {', '.join(sold)}")
+                    st.rerun()
+            else:
+                st.warning("Aucune position à vendre")
+    
+    st.markdown("---")
     
     # Display decisions
     if 'sim_decisions' in st.session_state:
         decisions = st.session_state['sim_decisions']
         
-        st.markdown("---")
         st.markdown(f"### 📋 {len(decisions)} Décisions")
         
         for d in sorted(decisions, key=lambda x: x['score'], reverse=True):
             action_emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}.get(d['action'], "⚪")
-            action_color = {"BUY": "green", "SELL": "red", "HOLD": "orange"}.get(d['action'], "gray")
+            executed_mark = "✅" if d.get('executed') else ""
             
             cols = st.columns([1, 2, 1, 1, 3, 1])
-            cols[0].markdown(f"{action_emoji}")
+            cols[0].markdown(f"{action_emoji} {executed_mark}")
             cols[1].markdown(f"**{d['symbol']}**")
             cols[2].markdown(f"${d['price']:.4f}")
-            cols[3].markdown(f"{d['score']}/100")
+            cols[3].markdown(f"**{d['score']}**/100")
             cols[4].caption(d['reason'])
             
-            # Execute button for BUY signals
-            if d['action'] == 'BUY':
+            # Execute button for BUY signals (if not already executed)
+            if d['action'] == 'BUY' and not d.get('executed'):
                 if cols[5].button("💰", key=f"buy_{d['symbol']}", help=f"Buy {d['symbol']}"):
-                    amount = min(100, sim_data['portfolio'].get('USD', 0) * 0.1)  # 10% or $100 max
-                    result = execute_sim_trade(sim_data, 'BUY', d['symbol'], amount, d['price'])
+                    result = execute_sim_trade(sim_data, 'BUY', d['symbol'], trade_amount, d['price'])
                     if 'error' not in result:
                         save_simulation_data(sim_data)
                         st.success(f"✅ Bought {d['symbol']}")
                         st.rerun()
+            elif d.get('executed'):
+                cols[5].markdown("✅")
 
 
 # ============ TAB 3: History ============
