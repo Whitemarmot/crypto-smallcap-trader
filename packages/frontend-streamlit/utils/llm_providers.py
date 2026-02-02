@@ -401,7 +401,16 @@ def call_openclaw(prompt: str, model: str = 'openclaw:main', thinking: str = 'hi
                 print(f"[THINKING] {thinking_content[:500]}...")
             
             usage = data.get('usage', {})
-            return text, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), latency, None
+            tokens_in = usage.get('prompt_tokens', 0)
+            tokens_out = usage.get('completion_tokens', 0)
+            
+            # Estimate tokens if API returns 0 (~4 chars per token)
+            if tokens_in == 0:
+                tokens_in = len(prompt) // 4
+            if tokens_out == 0 and text:
+                tokens_out = len(text) // 4
+            
+            return text, tokens_in, tokens_out, latency, None
         else:
             return None, 0, 0, latency, f"Error {response.status_code}: {response.text}"
             
