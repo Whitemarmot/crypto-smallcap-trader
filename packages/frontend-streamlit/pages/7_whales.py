@@ -11,10 +11,24 @@ import time
 
 # Add paths
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', 'copy-trader'))
 
-from utils.config import SUPPORTED_NETWORKS, load_config
-from utils.database import get_db
+from utils.whale_api import (
+    get_known_whales, 
+    get_whale_transactions_sync, 
+    get_token_transfers,
+    analyze_whale_portfolio_sync,
+    check_for_alerts_sync,
+    load_tracked_whales,
+    save_tracked_whales,
+    KNOWN_WHALES_ETHEREUM,
+    KNOWN_WHALES_BASE
+)
+
+# Supported networks config
+SUPPORTED_NETWORKS = {
+    'ethereum': {'icon': '⟠', 'explorer': 'https://etherscan.io'},
+    'base': {'icon': '🔵', 'explorer': 'https://basescan.org'}
+}
 
 # Page config
 st.set_page_config(
@@ -23,9 +37,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# Load configuration
-config = load_config()
-db = get_db()
+# API key from env
+ETHERSCAN_API_KEY = os.environ.get('ETHERSCAN_API_KEY', '')
 
 # Custom CSS
 st.markdown("""
@@ -84,19 +97,16 @@ with st.sidebar:
         format_func=lambda x: f"{SUPPORTED_NETWORKS.get(x, {}).get('icon', '🔗')} {x.upper()}"
     )
     
-    # API Key check
-    api_key = config.api_keys.etherscan_api_key if config.api_keys else None
-    if not api_key:
-        api_key = os.environ.get('ETHERSCAN_API_KEY', '')
+    # API Key check (optional - free tier works without key)
+    api_key = ETHERSCAN_API_KEY
     
-    if not api_key:
-        st.warning("⚠️ No Etherscan API key configured")
-        st.caption("Go to Settings to add your API key")
-        api_key_input = st.text_input("Or enter API key here:", type="password")
+    if api_key:
+        st.success("✅ API Key configured")
+    else:
+        st.info("ℹ️ Using free tier (5 req/sec)")
+        api_key_input = st.text_input("API key (optional):", type="password")
         if api_key_input:
             api_key = api_key_input
-    else:
-        st.success("✅ API Key configured")
     
     st.markdown("---")
     
@@ -105,13 +115,17 @@ with st.sidebar:
     if auto_refresh:
         refresh_interval = st.slider("Interval (seconds)", 30, 300, 60)
 
-# Initialize session state
+# Initialize session state (load from file for persistence)
 if 'tracked_whales' not in st.session_state:
-    st.session_state.tracked_whales = []
+    st.session_state.tracked_whales = load_tracked_whales()
 if 'whale_transactions' not in st.session_state:
     st.session_state.whale_transactions = {}
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
+
+def sync_tracked_whales():
+    """Sync session state to file"""
+    save_tracked_whales(st.session_state.tracked_whales)
 
 # Tabs
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -127,104 +141,99 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.subheader("Known Whale Addresses")
     
-    try:
-        from whale_api import get_known_whales, KNOWN_WHALES_ETHEREUM, KNOWN_WHALES_BASE
-        
-        whales = get_known_whales(network)
-        
-        if not whales:
-            st.info(f"No known whales configured for {network}")
-        else:
-            # Filter options
-            col1, col2 = st.columns([2, 1])
-            with col1:
-                search = st.text_input("🔍 Search by name or address", "")
-            with col2:
-                type_filter = st.selectbox(
-                    "Filter by type",
-                    ["All", "exchange", "market_maker", "smart_money", "defi_whale", "whale"]
-                )
-            
-            # Display whales
-            displayed = 0
-            for address, info in whales.items():
-                # Apply filters
-                if search:
-                    if search.lower() not in info['name'].lower() and search.lower() not in address.lower():
-                        continue
-                if type_filter != "All" and info.get('type') != type_filter:
-                    continue
-                
-                displayed += 1
-                
-                with st.container():
-                    col1, col2, col3 = st.columns([3, 1, 1])
-                    
-                    with col1:
-                        importance_emoji = {
-                            "high": "🔴",
-                            "medium": "🟡",
-                            "low": "🟢"
-                        }.get(info.get('importance', 'medium'), "⚪")
-                        
-                        st.markdown(f"**{importance_emoji} {info['name']}**")
-                        st.code(address, language=None)
-                        
-                        if info.get('description'):
-                            st.caption(info['description'])
-                        
-                        # Type badge
-                        type_emoji = {
-                            "exchange": "🏦",
-                            "market_maker": "📈",
-                            "smart_money": "🧠",
-                            "defi_whale": "🌊",
-                            "whale": "🐋",
-                            "foundation": "🏛️",
-                            "bridge": "🌉"
-                        }.get(info.get('type', 'whale'), "🐋")
-                        st.caption(f"{type_emoji} {info.get('type', 'whale').replace('_', ' ').title()}")
-                    
-                    with col2:
-                        # Check if already tracking
-                        is_tracking = address in [w['address'] for w in st.session_state.tracked_whales]
-                        
-                        if is_tracking:
-                            if st.button("🚫 Untrack", key=f"untrack_{address}"):
-                                st.session_state.tracked_whales = [
-                                    w for w in st.session_state.tracked_whales 
-                                    if w['address'] != address
-                                ]
-                                st.rerun()
-                        else:
-                            if st.button("👀 Track", key=f"track_{address}", type="primary"):
-                                st.session_state.tracked_whales.append({
-                                    'address': address,
-                                    'name': info['name'],
-                                    'type': info.get('type', 'whale'),
-                                    'network': network
-                                })
-                                st.success(f"Now tracking {info['name']}")
-                                st.rerun()
-                    
-                    with col3:
-                        explorer_url = SUPPORTED_NETWORKS.get(network, {}).get('explorer', 'https://etherscan.io')
-                        st.link_button(
-                            "🔗 Explorer",
-                            f"{explorer_url}/address/{address}",
-                            use_container_width=True
-                        )
-                    
-                    st.markdown("---")
-            
-            if displayed == 0:
-                st.info("No whales match your filters")
-            else:
-                st.caption(f"Showing {displayed} of {len(whales)} whales")
+    whales = get_known_whales(network)
     
-    except ImportError as e:
-        st.error(f"Could not load whale_api module: {e}")
-        st.info("Make sure the copy-trader package is properly installed")
+    if not whales:
+        st.info(f"No known whales configured for {network}")
+    else:
+        # Filter options
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            search = st.text_input("🔍 Search by name or address", "")
+        with col2:
+            type_filter = st.selectbox(
+                "Filter by type",
+                ["All", "exchange", "market_maker", "smart_money", "defi_whale", "whale"]
+            )
+        
+        # Display whales
+        displayed = 0
+        for address, info in whales.items():
+            # Apply filters
+            if search:
+                if search.lower() not in info['name'].lower() and search.lower() not in address.lower():
+                    continue
+            if type_filter != "All" and info.get('type') != type_filter:
+                continue
+            
+            displayed += 1
+            
+            with st.container():
+                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                with col1:
+                    importance_emoji = {
+                        "high": "🔴",
+                        "medium": "🟡",
+                        "low": "🟢"
+                    }.get(info.get('importance', 'medium'), "⚪")
+                    
+                    st.markdown(f"**{importance_emoji} {info['name']}**")
+                    st.code(address, language=None)
+                    
+                    if info.get('description'):
+                        st.caption(info['description'])
+                    
+                    # Type badge
+                    type_emoji = {
+                        "exchange": "🏦",
+                        "market_maker": "📈",
+                        "smart_money": "🧠",
+                        "defi_whale": "🌊",
+                        "whale": "🐋",
+                        "foundation": "🏛️",
+                        "bridge": "🌉"
+                    }.get(info.get('type', 'whale'), "🐋")
+                    st.caption(f"{type_emoji} {info.get('type', 'whale').replace('_', ' ').title()}")
+                
+                with col2:
+                    # Check if already tracking
+                    is_tracking = address in [w['address'] for w in st.session_state.tracked_whales]
+                    
+                    if is_tracking:
+                        if st.button("🚫 Untrack", key=f"untrack_{address}"):
+                            st.session_state.tracked_whales = [
+                                w for w in st.session_state.tracked_whales 
+                                if w['address'] != address
+                            ]
+                            sync_tracked_whales()
+                            st.rerun()
+                    else:
+                        if st.button("👀 Track", key=f"track_{address}", type="primary"):
+                            st.session_state.tracked_whales.append({
+                                'address': address,
+                                'name': info['name'],
+                                'type': info.get('type', 'whale'),
+                                'network': network
+                            })
+                            sync_tracked_whales()
+                            st.success(f"Now tracking {info['name']}")
+                            st.rerun()
+                
+                with col3:
+                    explorer_url = SUPPORTED_NETWORKS.get(network, {}).get('explorer', 'https://etherscan.io')
+                    st.link_button(
+                        "🔗 Explorer",
+                        f"{explorer_url}/address/{address}",
+                        use_container_width=True
+                    )
+                
+                st.markdown("---")
+        
+        if displayed == 0:
+            st.info("No whales match your filters")
+        else:
+            st.caption(f"Showing {displayed} of {len(whales)} whales")
     
     # Add custom whale
     st.markdown("---")
@@ -245,6 +254,7 @@ with tab1:
                     'type': 'custom',
                     'network': network
                 })
+                sync_tracked_whales()
                 st.success(f"Added {custom_name or custom_address[:10]}... to tracking!")
                 st.rerun()
             else:
@@ -277,7 +287,6 @@ with tab2:
                     if st.button("📋 Analyze", key=f"analyze_{i}"):
                         with st.spinner("Analyzing portfolio..."):
                             try:
-                                from whale_api import analyze_whale_portfolio_sync
                                 portfolio = analyze_whale_portfolio_sync(
                                     whale['address'],
                                     whale.get('network', network),
@@ -291,6 +300,7 @@ with tab2:
                 with col4:
                     if st.button("🗑️", key=f"remove_{i}"):
                         st.session_state.tracked_whales.pop(i)
+                        sync_tracked_whales()
                         st.rerun()
                 
                 # Show portfolio if analyzed
@@ -320,7 +330,6 @@ with tab2:
             if st.button("🔄 Refresh All", type="primary"):
                 with st.spinner("Fetching transactions..."):
                     try:
-                        from whale_api import get_whale_transactions_sync
                         for whale in st.session_state.tracked_whales:
                             txs = get_whale_transactions_sync(
                                 whale['address'],
@@ -328,7 +337,17 @@ with tab2:
                                 limit=20,
                                 api_key=api_key
                             )
-                            st.session_state.whale_transactions[whale['address']] = txs
+                            # Also get token transfers
+                            token_txs = get_token_transfers(
+                                whale['address'],
+                                whale.get('network', network),
+                                limit=20,
+                                api_key=api_key
+                            )
+                            # Combine and sort
+                            all_txs = txs + token_txs
+                            all_txs.sort(key=lambda x: x.get('timestamp', ''), reverse=True)
+                            st.session_state.whale_transactions[whale['address']] = all_txs
                             time.sleep(0.3)  # Rate limiting
                         st.session_state.last_refresh = datetime.now()
                         st.success("All wallets refreshed!")
@@ -339,6 +358,7 @@ with tab2:
             if st.button("🗑️ Clear All"):
                 st.session_state.tracked_whales = []
                 st.session_state.whale_transactions = {}
+                sync_tracked_whales()
                 st.rerun()
         
         if st.session_state.last_refresh:
@@ -471,8 +491,6 @@ with tab4:
         else:
             with st.spinner("Checking for alerts..."):
                 try:
-                    from whale_api import check_for_alerts_sync
-                    
                     all_alerts = []
                     for whale in st.session_state.tracked_whales:
                         alerts = check_for_alerts_sync(
