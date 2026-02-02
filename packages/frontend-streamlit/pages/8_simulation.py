@@ -306,9 +306,13 @@ Si rien d'intéressant: []
 st.markdown("---")
 with st.expander("📜 Historique"):
     for h in sim.get('history', [])[-20:][::-1]:
-        em = '🟢' if h['action'] == 'BUY' else '🔴'
+        em = '🟢' if h.get('action') == 'BUY' else '🔴'
         pnl = f" PnL: {h.get('pnl',0):+.2f}$" if 'pnl' in h else ""
-        st.caption(f"{h['ts'][:16]} {em} {h['action']} {h['symbol']} {h['qty']:.4f} @ ${h['price']:.4f}{pnl}")
+        ts = h.get('ts') or h.get('timestamp', '?')
+        qty = h.get('qty') or h.get('amount', 0)
+        symbol = h.get('symbol', '?')
+        price = h.get('price', 0)
+        st.caption(f"{str(ts)[:16]} {em} {h.get('action','?')} {symbol} {qty:.4f} @ ${price:.4f}{pnl}")
 
 # Reset
 if st.button("🔄 Reset Simulation"):
