@@ -24,27 +24,33 @@ WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
 # Ensure directories exist
 os.makedirs(WALLETS_DIR, exist_ok=True)
 
-# Styles - fond différent pour simulation
+# Styles - fond différent pour simulation (meilleur contraste)
 st.markdown("""
 <style>
     .wallet-sim {
-        background: linear-gradient(135deg, #1a1a3e 0%, #2d1b4e 100%);
-        border: 1px solid #6b4c9a;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
+        background: #2a1f4e;
+        border: 2px solid #8b5cf6;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 15px 0;
+        color: #ffffff;
     }
     .wallet-real {
-        background: linear-gradient(135deg, #1a2e1a 0%, #1b3d2d 100%);
-        border: 1px solid #4a9a6b;
-        border-radius: 10px;
-        padding: 15px;
-        margin: 10px 0;
+        background: #1a3a2a;
+        border: 2px solid #22c55e;
+        border-radius: 12px;
+        padding: 20px;
+        margin: 15px 0;
+        color: #ffffff;
+    }
+    .wallet-sim *, .wallet-real * {
+        color: #ffffff !important;
     }
     .wallet-header {
-        font-size: 1.3rem;
+        font-size: 1.4rem;
         font-weight: bold;
         margin-bottom: 10px;
+        color: #ffffff !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -195,19 +201,19 @@ if wallets:
         # Style based on type
         style_class = "wallet-sim" if is_sim else "wallet-real"
         type_badge = "🎮 SIMULATION" if is_sim else "💳 RÉEL"
-        type_color = "#9b59b6" if is_sim else "#27ae60"
+        type_color = "#a855f7" if is_sim else "#22c55e"
         
         # Wallet card
         st.markdown(f"""
         <div class="{style_class}">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
                 <div class="wallet-header">
                     {'🟢' if wallet.get('enabled') else '⚪'} {wallet['name']}
-                    <span style="font-size: 0.7em; background: {type_color}; padding: 2px 8px; border-radius: 10px; margin-left: 10px;">{type_badge}</span>
+                    <span style="font-size: 0.65em; background: {type_color}; color: #000; padding: 3px 10px; border-radius: 12px; margin-left: 10px; font-weight: bold;">{type_badge}</span>
                 </div>
                 <div style="text-align: right;">
-                    <div style="font-size: 1.5em; font-weight: bold;">${total_value:,.2f}</div>
-                    <div style="font-size: 0.8em; color: #888;">{len(positions)} positions | ${cash:,.2f} cash</div>
+                    <div style="font-size: 1.6em; font-weight: bold; color: #fff;">${total_value:,.2f}</div>
+                    <div style="font-size: 0.85em; color: #ccc;">{len(positions)} positions | ${cash:,.2f} cash</div>
                 </div>
             </div>
         </div>
@@ -343,10 +349,10 @@ col1, col2 = st.columns(2)
 with col1:
     # Simulation wallet
     st.markdown("""
-    <div class="wallet-sim" style="text-align: center; padding: 20px;">
-        <div style="font-size: 2em;">🎮</div>
-        <div style="font-size: 1.2em; font-weight: bold;">Simulation</div>
-        <div style="color: #888;">Paper trading avec argent virtuel</div>
+    <div class="wallet-sim" style="text-align: center; padding: 25px;">
+        <div style="font-size: 2.5em;">🎮</div>
+        <div style="font-size: 1.3em; font-weight: bold; color: #fff;">Simulation</div>
+        <div style="color: #bbb;">Paper trading avec argent virtuel</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -363,10 +369,10 @@ with col1:
 with col2:
     # Real wallet
     st.markdown("""
-    <div class="wallet-real" style="text-align: center; padding: 20px;">
-        <div style="font-size: 2em;">💳</div>
-        <div style="font-size: 1.2em; font-weight: bold;">Réel</div>
-        <div style="color: #888;">Trading avec vrais fonds</div>
+    <div class="wallet-real" style="text-align: center; padding: 25px;">
+        <div style="font-size: 2.5em;">💳</div>
+        <div style="font-size: 1.3em; font-weight: bold; color: #fff;">Réel</div>
+        <div style="color: #bbb;">Trading avec vrais fonds</div>
     </div>
     """, unsafe_allow_html=True)
     
@@ -396,14 +402,14 @@ with st.expander("ℹ️ Légende"):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("""
-        <div class="wallet-sim" style="padding: 10px;">
-            🎮 <strong>Simulation</strong> = Paper trading (argent virtuel)
+        <div class="wallet-sim" style="padding: 15px;">
+            🎮 <strong style="color:#fff;">Simulation</strong> <span style="color:#ccc;">= Paper trading (argent virtuel)</span>
         </div>
         """, unsafe_allow_html=True)
     with col2:
         st.markdown("""
-        <div class="wallet-real" style="padding: 10px;">
-            💳 <strong>Réel</strong> = Trading avec vrais fonds
+        <div class="wallet-real" style="padding: 15px;">
+            💳 <strong style="color:#fff;">Réel</strong> <span style="color:#ccc;">= Trading avec vrais fonds</span>
         </div>
         """, unsafe_allow_html=True)
     
