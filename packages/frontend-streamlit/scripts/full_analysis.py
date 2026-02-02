@@ -29,6 +29,9 @@ CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
 # Legacy path for backwards compatibility
 SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')
 
+# API key
+CMC_API_KEY = os.environ.get('CMC_API_KEY', '849ddcc694a049708d0b5392486d6eaa')
+
 def load_json(path, default):
     try:
         if os.path.exists(path):
@@ -121,6 +124,7 @@ def load_wallets():
             'name': w.get('name', wallet_id),
             'type': w.get('type', 'paper'),
             'chain': w.get('chain', 'base'),
+            'address': w.get('address'),  # For real wallets
             'max_positions': w.get('max_positions', 10),
             'data': wallet_data,
             'path': wallet_path,
@@ -239,6 +243,23 @@ def main():
     tradable_tokens = filter_tradable_tokens(sorted_tokens[:30], main_chain, max_tokens=30)
     print(f"✅ Found {len(tradable_tokens)} tradable tokens on {main_chain}", file=sys.stderr)
     
+    # Filter by KyberSwap tradability (only tokens we can actually swap)
+    print(f"🔄 Filtering tokens tradable via KyberSwap...", file=sys.stderr)
+    from utils.kyber_filter import check_kyber_tradable
+    kyber_tradable = []
+    for t in tradable_tokens[:15]:  # Check top 15
+        pair = t.get('pair', {})
+        token_addr = pair.get('baseToken', {}).get('address') if pair else None
+        if token_addr and check_kyber_tradable(token_addr):
+            t['kyber_tradable'] = True
+            kyber_tradable.append(t)
+            print(f"  ✅ {t.get('symbol')}: KyberSwap OK", file=sys.stderr)
+        else:
+            print(f"  ❌ {t.get('symbol')}: not on KyberSwap", file=sys.stderr)
+    
+    tradable_tokens = kyber_tradable if kyber_tradable else tradable_tokens[:5]
+    print(f"✅ {len(tradable_tokens)} tokens tradable via KyberSwap", file=sys.stderr)
+    
     # Analyze top candidates (only tradable ones)
     print("🔍 Analyzing top 5 tradable candidates...", file=sys.stderr)
     candidates = []
@@ -267,9 +288,48 @@ def main():
         print(f"  💼 {wallet['name']}...", file=sys.stderr)
         
         wallet_data = wallet['data']
-        cash = wallet_data.get('portfolio', {}).get('USDC', 0)
         positions = wallet_data.get('positions', {})
         max_pos = wallet.get('max_positions', 10)
+        
+        # Get cash based on wallet type
+        if wallet.get('type') == 'real' and wallet.get('address'):
+            # Real wallet: get on-chain balance
+            try:
+                from web3 import Web3
+                import requests as req
+                
+                chain = wallet.get('chain', 'base')
+                rpc_urls = {'base': 'https://mainnet.base.org', 'ethereum': 'https://eth.llamarpc.com'}
+                stables = {'base': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'}
+                
+                w3 = Web3(Web3.HTTPProvider(rpc_urls.get(chain, rpc_urls['base'])))
+                address = Web3.to_checksum_address(wallet['address'])
+                
+                # ETH balance
+                eth_bal = w3.eth.get_balance(address)
+                eth_amount = float(w3.from_wei(eth_bal, 'ether'))
+                
+                # ETH price
+                resp = req.get('https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest',
+                    headers={'X-CMC_PRO_API_KEY': CMC_API_KEY}, params={'symbol': 'ETH'}, timeout=10)
+                eth_price = resp.json()['data']['ETH']['quote']['USD']['price']
+                eth_usd = eth_amount * eth_price
+                
+                # USDC balance
+                usdc_usd = 0
+                if chain in stables:
+                    balance_abi = [{"constant": True, "inputs": [{"name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
+                    contract = w3.eth.contract(address=Web3.to_checksum_address(stables[chain]), abi=balance_abi)
+                    usdc_usd = contract.functions.balanceOf(address).call() / 1e6
+                
+                cash = eth_usd + usdc_usd
+                print(f"    💰 On-chain: ${cash:.2f} (ETH ${eth_usd:.2f} + USDC ${usdc_usd:.2f})", file=sys.stderr)
+            except Exception as e:
+                print(f"    ⚠️ On-chain balance error: {e}", file=sys.stderr)
+                cash = wallet_data.get('portfolio', {}).get('USDC', 0)
+        else:
+            # Paper wallet: use JSON data
+            cash = wallet_data.get('portfolio', {}).get('USDC', 0)
         
         # Analyze positions for this wallet
         position_analysis = analyze_wallet_positions(wallet, tokens)

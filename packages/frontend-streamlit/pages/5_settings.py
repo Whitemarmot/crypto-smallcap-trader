@@ -543,10 +543,10 @@ with tab_export:
     stats = db.get_portfolio_stats()
     
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("👛 Wallets", stats['total_wallets'])
-    col2.metric("📝 Simulation", stats['paper_trades'])
-    col3.metric("📊 Trades", stats['total_trades'])
-    col4.metric("⚡ Exécutions (24h)", stats['recent_trades_24h'])
+    col1.metric("👛 Wallets", stats.get('total_wallets', 0))
+    col2.metric("📝 Simulation", stats.get('paper_trades', 0))
+    col3.metric("📊 Trades", stats.get('total_trades', 0))
+    col4.metric("⚡ Exécutions (24h)", stats.get('recent_trades_24h', 0))
     
     st.markdown("---")
     

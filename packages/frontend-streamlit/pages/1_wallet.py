@@ -7,6 +7,12 @@ import json
 import os
 from datetime import datetime
 
+# Add parent to path for imports
+import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from utils.real_trader import RealTrader, NATIVE_TOKEN
+
 st.set_page_config(
     page_title="👛 Wallets | SmallCap Trader",
     page_icon="👛",
@@ -42,6 +48,93 @@ CHAINS = {
     'bsc': {'name': 'BSC', 'icon': '🟡'},
     'solana': {'name': 'Solana', 'icon': '🟣'},
 }
+
+
+@st.cache_data(ttl=60)  # Cache 1 minute
+def get_eth_price() -> float:
+    """Get ETH price from CMC API"""
+    import requests
+    try:
+        url = "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest"
+        headers = {"X-CMC_PRO_API_KEY": "849ddcc694a049708d0b5392486d6eaa"}
+        params = {"symbol": "ETH", "convert": "USD"}
+        resp = requests.get(url, headers=headers, params=params, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data['data']['ETH']['quote']['USD']['price']
+    except:
+        pass
+    return 2500  # Fallback
+
+
+# Stablecoin addresses by chain
+STABLECOINS = {
+    'base': {
+        'USDC': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    },
+    'ethereum': {
+        'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        'USDT': '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+    },
+    'arbitrum': {
+        'USDC': '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    },
+}
+
+
+@st.cache_data(ttl=60)  # Cache 1 minute
+def get_onchain_balance(address: str, chain: str) -> dict:
+    """Get on-chain ETH + stablecoin balances"""
+    try:
+        from web3 import Web3
+        # Convert to checksum address
+        address = Web3.to_checksum_address(address)
+        
+        trader = RealTrader(chain=chain)
+        
+        # Get ETH balance
+        eth_balance = trader.w3.eth.get_balance(address)
+        eth_amount = float(trader.w3.from_wei(eth_balance, 'ether'))
+        
+        # Get ETH price from CMC
+        eth_price_usd = get_eth_price()
+        eth_usd = eth_amount * eth_price_usd
+        
+        # Get stablecoin balances
+        stables = STABLECOINS.get(chain, {})
+        stablecoin_usd = 0
+        stablecoin_balances = {}
+        
+        # ERC20 balanceOf ABI
+        balance_abi = [{"constant": True, "inputs": [{"name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
+        
+        for symbol, token_addr in stables.items():
+            try:
+                contract = trader.w3.eth.contract(
+                    address=Web3.to_checksum_address(token_addr),
+                    abi=balance_abi
+                )
+                balance = contract.functions.balanceOf(address).call()
+                # USDC/USDT have 6 decimals
+                decimals = 6
+                token_balance = balance / (10 ** decimals)
+                stablecoin_balances[symbol] = token_balance
+                stablecoin_usd += token_balance  # 1:1 for stablecoins
+            except Exception as e:
+                print(f"Error getting {symbol} balance: {e}")
+        
+        total_usd = eth_usd + stablecoin_usd
+        
+        return {
+            'eth': eth_amount,
+            'eth_usd': eth_usd,
+            'eth_price': eth_price_usd,
+            'stablecoins': stablecoin_balances,
+            'stablecoin_usd': stablecoin_usd,
+            'usd': total_usd,
+        }
+    except Exception as e:
+        return {'eth': 0, 'usd': 0, 'eth_price': 0, 'stablecoins': {}, 'stablecoin_usd': 0, 'error': str(e)}
 
 
 def load_wallets_config():
@@ -139,12 +232,7 @@ if wallets:
         is_sim = wallet_type == 'paper'
         
         data = load_wallet_data(wallet_id)
-        cash = data.get('portfolio', {}).get('USDC', 0)
         positions = data.get('positions', {})
-        
-        total_value = cash
-        for sym, pos in positions.items():
-            total_value += pos.get('amount', 0) * pos.get('avg_price', 0)
         
         # Header with type badge
         type_badge = "🎮 SIMULATION" if is_sim else "💳 RÉEL"
@@ -157,10 +245,54 @@ if wallets:
         if wallet_address:
             st.code(wallet_address)
         
+        # Get balance based on wallet type
+        if is_sim:
+            # Paper wallet: use JSON data
+            cash = data.get('portfolio', {}).get('USDC', 0)
+            total_value = cash
+            for sym, pos in positions.items():
+                total_value += pos.get('amount', 0) * pos.get('avg_price', 0)
+            cash_label = "💵 Cash (USDC)"
+            positions_value = total_value - cash
+            extra_balances = None
+        else:
+            # Real wallet: get on-chain balance
+            if wallet_address:
+                chain = wallet.get('chain', 'base')
+                balance = get_onchain_balance(wallet_address, chain)
+                eth_usd = balance.get('eth_usd', 0)
+                eth_amount = balance.get('eth', 0)
+                stablecoin_usd = balance.get('stablecoin_usd', 0)
+                stablecoins = balance.get('stablecoins', {})
+                
+                # Calculate positions value (tokens we bought)
+                positions_value = 0
+                for sym, pos in positions.items():
+                    # Use current price if available, else avg_price
+                    price = pos.get('current_price', pos.get('avg_price', 0))
+                    positions_value += pos.get('amount', 0) * price
+                
+                cash = eth_usd + stablecoin_usd  # ETH + stablecoins = cash
+                total_value = cash + positions_value
+                
+                # Build cash label with breakdown
+                parts = [f"ETH ({eth_amount:.4f})"]
+                for sym, amt in stablecoins.items():
+                    if amt > 0:
+                        parts.append(f"{sym} ({amt:.2f})")
+                cash_label = "💵 " + " + ".join(parts)
+                extra_balances = {'eth': eth_amount, 'eth_usd': eth_usd, 'stablecoins': stablecoins}
+            else:
+                cash = 0
+                total_value = 0
+                positions_value = 0
+                cash_label = "💵 Cash"
+                extra_balances = None
+        
         # Stats
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("💰 Valeur totale", f"${total_value:,.2f}")
-        col2.metric("💵 Cash", f"${cash:,.2f}")
+        col2.metric(cash_label, f"${cash:,.2f}")
         col3.metric("📊 Positions", f"{len(positions)}/{wallet.get('max_positions', 10)}")
         col4.metric("⛓️ Chain", wallet.get('chain', 'base').upper())
         

@@ -17,12 +17,20 @@ from utils.social_signals import get_tokens_by_market_cap_cmc
 
 # Real trading imports
 try:
-    from utils.real_trader import buy_token, sell_token, get_quote
-    from utils.wallet_keys import has_private_key
+    from utils.kyberswap import buy_token_kyber, KyberSwap
+    from utils.wallet_keys import has_private_key, get_private_key
     REAL_TRADING_AVAILABLE = True
+    SWAP_PROVIDER = "kyberswap"
 except ImportError as e:
-    print(f"⚠️ Real trading not available: {e}", file=sys.stderr)
-    REAL_TRADING_AVAILABLE = False
+    try:
+        from utils.real_trader import buy_token, sell_token
+        from utils.wallet_keys import has_private_key
+        REAL_TRADING_AVAILABLE = True
+        SWAP_PROVIDER = "paraswap"
+    except ImportError as e2:
+        print(f"⚠️ Real trading not available: {e2}", file=sys.stderr)
+        REAL_TRADING_AVAILABLE = False
+        SWAP_PROVIDER = None
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
@@ -208,59 +216,86 @@ def get_wallet_config(wallet_id: str) -> dict:
 
 
 def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_usd: float) -> tuple:
-    """Execute a real buy via 1inch"""
+    """Execute a real buy via KyberSwap (or fallback to Paraswap)"""
     if not REAL_TRADING_AVAILABLE:
-        return False, "Real trading module not available"
+        return False, "Real trading module not available", None
     
     address = wallet_cfg.get('address', '')
     chain = wallet_cfg.get('chain', 'base')
     
     if not address:
-        return False, "Wallet has no address"
+        return False, "Wallet has no address", None
     
     if not has_private_key(address):
-        return False, "No private key stored for this wallet"
+        return False, "No private key stored for this wallet", None
     
-    success, msg, tx_hash = buy_token(
-        chain=chain,
-        wallet_address=address,
-        token_symbol=symbol,
-        token_address=token_address,
-        amount_usd=amount_usd,
-    )
-    
-    if tx_hash:
-        msg += f" (tx: {tx_hash})"
-    
-    return success, msg
+    # Use KyberSwap if available
+    if SWAP_PROVIDER == "kyberswap":
+        success, msg, tx_hash, amount_out = buy_token_kyber(
+            wallet_address=address,
+            token_address=token_address,
+            amount_usd=amount_usd,
+            use_usdc=True,  # Use USDC for swaps
+        )
+        if tx_hash:
+            msg += f" (tx: {tx_hash})"
+        return success, msg, tx_hash, amount_out
+    else:
+        # Fallback to old method
+        from utils.real_trader import buy_token
+        success, msg, tx_hash = buy_token(
+            chain=chain,
+            wallet_address=address,
+            token_symbol=symbol,
+            token_address=token_address,
+            amount_usd=amount_usd,
+        )
+        if tx_hash:
+            msg += f" (tx: {tx_hash})"
+        return success, msg, tx_hash, 0
 
 
-def execute_real_sell(wallet_cfg: dict, symbol: str, token_address: str, amount: float) -> tuple:
-    """Execute a real sell via 1inch"""
+def execute_real_sell(wallet_cfg: dict, symbol: str, token_address: str, amount: float, decimals: int = 18) -> tuple:
+    """Execute a real sell via KyberSwap"""
     if not REAL_TRADING_AVAILABLE:
-        return False, "Real trading module not available"
+        return False, "Real trading module not available", None
     
     address = wallet_cfg.get('address', '')
-    chain = wallet_cfg.get('chain', 'base')
     
     if not address:
-        return False, "Wallet has no address"
+        return False, "Wallet has no address", None
     
     if not has_private_key(address):
-        return False, "No private key stored for this wallet"
+        return False, "No private key stored for this wallet", None
     
-    success, msg, tx_hash = sell_token(
-        chain=chain,
-        wallet_address=address,
-        token_symbol=symbol,
-        token_address=token_address,
-        amount=amount,
-    )
-    
-    if tx_hash:
-        msg += f" (tx: {tx_hash})"
-    
-    return success, msg
+    # Use KyberSwap for selling (token -> USDC)
+    if SWAP_PROVIDER == "kyberswap":
+        private_key = get_private_key(address)
+        kyber = KyberSwap(private_key)
+        
+        usdc = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        amount_wei = int(amount * (10 ** decimals))
+        
+        result = kyber.execute_swap(token_address, usdc, amount_wei)
+        
+        if result["success"]:
+            usdc_out = int(result.get("amount_out", 0)) / 1e6
+            return True, f"Sold {amount:.4f} {symbol} for ${usdc_out:.2f}", result["tx_hash"]
+        else:
+            return False, result.get("error", "Sell failed"), result.get("tx_hash")
+    else:
+        # Fallback
+        from utils.real_trader import sell_token
+        success, msg, tx_hash = sell_token(
+            chain=wallet_cfg.get('chain', 'base'),
+            wallet_address=address,
+            token_symbol=symbol,
+            token_address=token_address,
+            amount=amount,
+        )
+        if tx_hash:
+            msg += f" (tx: {tx_hash})"
+        return success, msg, tx_hash
 
 
 def main():
@@ -323,11 +358,19 @@ def main():
             tp2 = d.get('tp2')
             
             if is_real and token_address:
-                # Real trading
-                success, msg = execute_real_buy(wallet_cfg, symbol, token_address, usd)
+                # Real trading via KyberSwap
+                result = execute_real_buy(wallet_cfg, symbol, token_address, usd)
+                success, msg = result[0], result[1]
+                tx_hash = result[2] if len(result) > 2 else None
+                amount_out = result[3] if len(result) > 3 else 0
                 if success:
-                    # Also update local tracking
-                    execute_buy(sim, symbol, usd, price, stop_loss, tp1, tp2)
+                    # Update local tracking with actual amount received
+                    actual_price = usd / amount_out if amount_out > 0 else price
+                    execute_buy(sim, symbol, usd, actual_price, stop_loss, tp1, tp2)
+                    # Update position with token address for future sells
+                    if symbol in sim.get('positions', {}):
+                        sim['positions'][symbol]['token_address'] = token_address
+                        sim['positions'][symbol]['amount'] = amount_out if amount_out > 0 else sim['positions'][symbol].get('amount', 0)
             else:
                 # Paper trading
                 success, msg = execute_buy(sim, symbol, usd, price, stop_loss, tp1, tp2)
@@ -355,8 +398,11 @@ def main():
                 # Real trading - get amount from position
                 pos = sim.get('positions', {}).get(symbol, {})
                 amount = pos.get('amount', 0)
+                # Get token address from position if available
+                token_addr = pos.get('token_address', token_address)
                 if amount > 0:
-                    success, msg = execute_real_sell(wallet_cfg, symbol, token_address, amount)
+                    result = execute_real_sell(wallet_cfg, symbol, token_addr, amount)
+                    success, msg = result[0], result[1]
                     if success:
                         # Also update local tracking
                         execute_sell(sim, symbol, price, reason)

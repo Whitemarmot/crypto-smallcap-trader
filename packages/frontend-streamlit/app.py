@@ -28,6 +28,60 @@ def load_json(path, default):
         pass
     return default
 
+
+@st.cache_data(ttl=120)
+def get_real_wallet_balance(address: str, chain: str) -> dict:
+    """Get on-chain balance for real wallets"""
+    try:
+        from web3 import Web3
+        
+        # RPC endpoints
+        rpc_urls = {
+            'base': 'https://mainnet.base.org',
+            'ethereum': 'https://eth.llamarpc.com',
+            'arbitrum': 'https://arb1.arbitrum.io/rpc',
+        }
+        
+        # Stablecoin addresses
+        stables = {
+            'base': {'USDC': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'},
+            'ethereum': {'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48'},
+        }
+        
+        w3 = Web3(Web3.HTTPProvider(rpc_urls.get(chain, rpc_urls['base'])))
+        address = Web3.to_checksum_address(address)
+        
+        # ETH balance
+        eth_balance = w3.eth.get_balance(address)
+        eth_amount = float(w3.from_wei(eth_balance, 'ether'))
+        
+        # Get ETH price
+        import requests
+        resp = requests.get(
+            'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest',
+            headers={'X-CMC_PRO_API_KEY': '849ddcc694a049708d0b5392486d6eaa'},
+            params={'symbol': 'ETH'}, timeout=10
+        )
+        eth_price = resp.json()['data']['ETH']['quote']['USD']['price']
+        eth_usd = eth_amount * eth_price
+        
+        # Stablecoin balance
+        stable_usd = 0
+        chain_stables = stables.get(chain, {})
+        balance_abi = [{"constant": True, "inputs": [{"name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
+        
+        for symbol, token_addr in chain_stables.items():
+            try:
+                contract = w3.eth.contract(address=Web3.to_checksum_address(token_addr), abi=balance_abi)
+                bal = contract.functions.balanceOf(address).call()
+                stable_usd += bal / 1e6  # USDC has 6 decimals
+            except:
+                pass
+        
+        return {'eth': eth_amount, 'eth_usd': eth_usd, 'stable_usd': stable_usd, 'total_usd': eth_usd + stable_usd}
+    except Exception as e:
+        return {'eth': 0, 'eth_usd': 0, 'stable_usd': 0, 'total_usd': 0, 'error': str(e)}
+
 # Load data
 wallets_config = load_json(WALLETS_CONFIG, {'wallets': []})
 bot_config = load_json(BOT_CONFIG, {})
@@ -44,9 +98,17 @@ for w in wallets:
     wallet_path = os.path.join(WALLETS_DIR, f"{w['id']}.json")
     data = load_json(wallet_path, {'portfolio': {'USDC': 0}, 'positions': {}, 'closed_positions': []})
     
-    cash = data.get('portfolio', {}).get('USDC', 0)
     positions = data.get('positions', {})
     closed = data.get('closed_positions', [])
+    
+    # Get cash based on wallet type
+    if w.get('type') == 'real' and w.get('address'):
+        # Real wallet: get on-chain balance
+        balance = get_real_wallet_balance(w['address'], w.get('chain', 'base'))
+        cash = balance.get('total_usd', 0)
+    else:
+        # Paper wallet: use JSON data
+        cash = data.get('portfolio', {}).get('USDC', 0)
     
     # Calculate position value
     pos_value = 0
@@ -100,8 +162,14 @@ with col_left:
         for w in wallets:
             wallet_path = os.path.join(WALLETS_DIR, f"{w['id']}.json")
             data = load_json(wallet_path, {'portfolio': {'USDC': 0}, 'positions': {}})
-            cash = data.get('portfolio', {}).get('USDC', 0)
             positions = data.get('positions', {})
+            
+            # Get cash based on wallet type
+            if w.get('type') == 'real' and w.get('address'):
+                balance = get_real_wallet_balance(w['address'], w.get('chain', 'base'))
+                cash = balance.get('total_usd', 0)
+            else:
+                cash = data.get('portfolio', {}).get('USDC', 0)
             
             pos_value = sum(p.get('amount', 0) * p.get('avg_price', 0) for p in positions.values())
             total = cash + pos_value
