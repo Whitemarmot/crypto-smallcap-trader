@@ -3,6 +3,7 @@
 """
 
 import os
+import sys
 import json
 import requests
 import time
@@ -58,6 +59,43 @@ DEFAULT_SLIPPAGE = 1
 # Gas reserve - always keep this amount of native token for gas
 GAS_RESERVE_ETH = 0.005  # ~$15-20 at current prices
 GAS_RESERVE_WEI = int(GAS_RESERVE_ETH * 1e18)
+
+# Alert threshold - warn when gas drops below this
+GAS_ALERT_THRESHOLD = 0.01  # Alert at 0.01 ETH
+
+
+def send_gas_alert(chain: str, wallet_address: str, balance_eth: float):
+    """Send alert to Damien when gas is low"""
+    try:
+        import requests
+        
+        # OpenClaw API to send message
+        OPENCLAW_URL = 'http://localhost:18789'
+        OPENCLAW_TOKEN = os.environ.get('OPENCLAW_TOKEN', '354943dd82e0b4e2860dd25a7fcebdfcfc2b079c2a5bf34e')
+        
+        message = f"⛽ **Alerte Gas Bas!**\n\n"
+        message += f"Wallet: `{wallet_address[:8]}...{wallet_address[-6:]}`\n"
+        message += f"Chain: {chain.upper()}\n"
+        message += f"Balance: **{balance_eth:.4f} ETH**\n"
+        message += f"Minimum requis: {GAS_RESERVE_ETH} ETH\n\n"
+        message += f"👉 Recharge le wallet pour continuer le trading réel!"
+        
+        # Use OpenClaw to send via current channel
+        requests.post(
+            f'{OPENCLAW_URL}/v1/chat/completions',
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {OPENCLAW_TOKEN}'
+            },
+            json={
+                'model': 'openclaw:main',
+                'messages': [{'role': 'user', 'content': f'SYSTEM: Send this alert to Damien: {message}'}]
+            },
+            timeout=30
+        )
+        print(f"⚠️ Gas alert sent for {wallet_address[:10]}...", file=sys.stderr)
+    except Exception as e:
+        print(f"❌ Failed to send gas alert: {e}", file=sys.stderr)
 
 
 def get_gas_balance(chain: str, wallet_address: str) -> Tuple[float, bool]:
@@ -254,7 +292,13 @@ def execute_swap(
         return False, "❌ Wallet has no ETH for gas", None
     
     if balance < GAS_RESERVE_WEI:
+        # Send alert to Damien
+        send_gas_alert(chain, wallet_address, balance / 1e18)
         return False, f"❌ Insufficient gas reserve. Have {balance/1e18:.4f} ETH, need {GAS_RESERVE_ETH} ETH minimum", None
+    
+    # Also alert if getting low (but still enough)
+    if balance / 1e18 < GAS_ALERT_THRESHOLD:
+        send_gas_alert(chain, wallet_address, balance / 1e18)
     
     # Estimate gas cost
     gas_price = w3.eth.gas_price
