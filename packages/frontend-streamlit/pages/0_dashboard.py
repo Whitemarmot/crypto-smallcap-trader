@@ -62,6 +62,103 @@ with col_refresh:
 
 st.markdown("---")
 
+# ========== BOT TRADING STATUS ==========
+import requests
+import time
+
+OPENCLAW_API = "http://localhost:18789"
+OPENCLAW_TOKEN = "354943dd82e0b4e2860dd25a7fcebdfcfc2b079c2a5bf34e"
+CRON_JOB_ID = "d6ead671-90b7-4329-9d9b-28c033e29a30"
+
+def get_cron_status():
+    """Get cron job status from OpenClaw API"""
+    try:
+        resp = requests.get(
+            f"{OPENCLAW_API}/api/cron",
+            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
+            timeout=5
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            for job in data.get('jobs', []):
+                if job.get('id') == CRON_JOB_ID:
+                    return job
+    except:
+        pass
+    return None
+
+def trigger_cron_now():
+    """Trigger cron job manually"""
+    try:
+        resp = requests.post(
+            f"{OPENCLAW_API}/api/cron/{CRON_JOB_ID}/run",
+            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
+            timeout=10
+        )
+        return resp.status_code == 200
+    except:
+        return False
+
+# Bot status section
+st.subheader("🤖 Bot Trading")
+
+cron_status = get_cron_status()
+
+if cron_status:
+    col_countdown, col_last, col_trigger = st.columns([2, 2, 1])
+    
+    with col_countdown:
+        next_run_ms = cron_status.get('state', {}).get('nextRunAtMs', 0)
+        now_ms = int(time.time() * 1000)
+        remaining_ms = max(0, next_run_ms - now_ms)
+        remaining_sec = remaining_ms // 1000
+        
+        minutes = remaining_sec // 60
+        seconds = remaining_sec % 60
+        
+        if remaining_sec > 0:
+            st.metric(
+                "⏱️ Prochain Run",
+                f"{minutes:02d}:{seconds:02d}",
+                delta="En attente" if cron_status.get('enabled') else "⏸️ Désactivé"
+            )
+        else:
+            st.metric("⏱️ Prochain Run", "Imminent", delta="🔄 En cours...")
+    
+    with col_last:
+        last_run_ms = cron_status.get('state', {}).get('lastRunAtMs', 0)
+        last_status = cron_status.get('state', {}).get('lastStatus', 'unknown')
+        last_duration = cron_status.get('state', {}).get('lastDurationMs', 0)
+        
+        if last_run_ms > 0:
+            last_run_time = datetime.fromtimestamp(last_run_ms / 1000)
+            time_ago = datetime.now() - last_run_time
+            mins_ago = int(time_ago.total_seconds() / 60)
+            
+            status_icon = "✅" if last_status == "ok" else "❌"
+            st.metric(
+                "📊 Dernier Run",
+                f"il y a {mins_ago}min",
+                delta=f"{status_icon} {last_duration/1000:.1f}s"
+            )
+        else:
+            st.metric("📊 Dernier Run", "Jamais", delta=None)
+    
+    with col_trigger:
+        st.write("")  # Spacing
+        if st.button("🚀 Run Now", use_container_width=True, type="primary"):
+            with st.spinner("Déclenchement..."):
+                if trigger_cron_now():
+                    st.success("✅ Bot lancé!")
+                    time.sleep(1)
+                    st.rerun()
+                else:
+                    st.error("❌ Erreur")
+else:
+    st.warning("⚠️ Bot non configuré - Cron job introuvable")
+
+st.markdown("---")
+
 # ========== FETCH REAL DATA ==========
 wallets = db.get_wallets()
 stats = db.get_portfolio_stats()
