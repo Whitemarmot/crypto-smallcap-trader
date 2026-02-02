@@ -6,9 +6,6 @@ import streamlit as st
 import json
 import os
 from datetime import datetime
-import sys
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 st.set_page_config(
     page_title="👛 Wallets | SmallCap Trader",
@@ -21,39 +18,7 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
 WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
 
-# Ensure directories exist
 os.makedirs(WALLETS_DIR, exist_ok=True)
-
-# Styles - fond différent pour simulation (meilleur contraste)
-st.markdown("""
-<style>
-    .wallet-sim {
-        background: #2a1f4e;
-        border: 2px solid #8b5cf6;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 15px 0;
-        color: #ffffff;
-    }
-    .wallet-real {
-        background: #1a3a2a;
-        border: 2px solid #22c55e;
-        border-radius: 12px;
-        padding: 20px;
-        margin: 15px 0;
-        color: #ffffff;
-    }
-    .wallet-sim *, .wallet-real * {
-        color: #ffffff !important;
-    }
-    .wallet-header {
-        font-size: 1.4rem;
-        font-weight: bold;
-        margin-bottom: 10px;
-        color: #ffffff !important;
-    }
-</style>
-""", unsafe_allow_html=True)
 
 # ========== CONFIG ==========
 AI_PROFILES = {
@@ -80,7 +45,6 @@ CHAINS = {
 
 
 def load_wallets_config():
-    """Load wallets configuration"""
     if os.path.exists(WALLETS_CONFIG):
         with open(WALLETS_CONFIG, 'r') as f:
             return json.load(f)
@@ -88,13 +52,11 @@ def load_wallets_config():
 
 
 def save_wallets_config(config):
-    """Save wallets configuration"""
     with open(WALLETS_CONFIG, 'w') as f:
         json.dump(config, f, indent=2)
 
 
 def load_wallet_data(wallet_id):
-    """Load wallet data (portfolio, positions, history)"""
     path = os.path.join(WALLETS_DIR, f'{wallet_id}.json')
     if os.path.exists(path):
         with open(path, 'r') as f:
@@ -103,24 +65,19 @@ def load_wallet_data(wallet_id):
 
 
 def save_wallet_data(wallet_id, data):
-    """Save wallet data"""
     path = os.path.join(WALLETS_DIR, f'{wallet_id}.json')
     with open(path, 'w') as f:
         json.dump(data, f, indent=2, default=str)
 
 
 def create_wallet(wallet_type, name, initial_capital=10000, chain='base'):
-    """Create a new wallet"""
     config = load_wallets_config()
-    
-    # Generate unique ID
     wallet_id = f"{wallet_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     
-    # Create wallet entry
     wallet = {
         'id': wallet_id,
         'name': name,
-        'type': wallet_type,  # 'paper' (simulation) or 'real'
+        'type': wallet_type,
         'enabled': True,
         'chain': chain,
         'initial_capital': initial_capital,
@@ -133,19 +90,16 @@ def create_wallet(wallet_type, name, initial_capital=10000, chain='base'):
         'created_at': datetime.now().isoformat(),
     }
     
-    # For real wallets, we'd store address/key (encrypted)
     if wallet_type == 'real':
-        wallet['address'] = ''  # To be filled
+        wallet['address'] = ''
     
     config['wallets'].append(wallet)
     
-    # Set as active if first wallet
     if not config.get('active_wallet'):
         config['active_wallet'] = wallet_id
     
     save_wallets_config(config)
     
-    # Create wallet data file
     if wallet_type == 'paper':
         save_wallet_data(wallet_id, {
             'portfolio': {'USDC': initial_capital},
@@ -158,17 +112,14 @@ def create_wallet(wallet_type, name, initial_capital=10000, chain='base'):
 
 
 def delete_wallet(wallet_id):
-    """Delete a wallet"""
     config = load_wallets_config()
     config['wallets'] = [w for w in config['wallets'] if w['id'] != wallet_id]
     
-    # Update active wallet if needed
     if config.get('active_wallet') == wallet_id:
         config['active_wallet'] = config['wallets'][0]['id'] if config['wallets'] else None
     
     save_wallets_config(config)
     
-    # Delete wallet data file
     path = os.path.join(WALLETS_DIR, f'{wallet_id}.json')
     if os.path.exists(path):
         os.remove(path)
@@ -176,7 +127,6 @@ def delete_wallet(wallet_id):
 
 # ========== PAGE ==========
 st.title("👛 Gestion des Wallets")
-st.caption("Simulation et réels - tous au même endroit")
 
 config = load_wallets_config()
 wallets = config.get('wallets', [])
@@ -188,41 +138,34 @@ if wallets:
         wallet_type = wallet.get('type', 'paper')
         is_sim = wallet_type == 'paper'
         
-        # Load wallet data for stats
         data = load_wallet_data(wallet_id)
         cash = data.get('portfolio', {}).get('USDC', 0)
         positions = data.get('positions', {})
         
-        # Calculate total value
         total_value = cash
         for sym, pos in positions.items():
             total_value += pos.get('amount', 0) * pos.get('avg_price', 0)
         
-        # Style based on type
-        style_class = "wallet-sim" if is_sim else "wallet-real"
+        # Header with type badge
         type_badge = "🎮 SIMULATION" if is_sim else "💳 RÉEL"
-        type_color = "#a855f7" if is_sim else "#22c55e"
-        
-        # Get address for real wallets
-        wallet_address = wallet.get('address', '')
-        
-        # Wallet card - using Streamlit native components for reliability
         status_icon = '🟢' if wallet.get('enabled') else '⚪'
         
-        col_info, col_value = st.columns([2, 1])
+        st.subheader(f"{status_icon} {wallet['name']} — {type_badge}")
         
-        with col_info:
-            st.markdown(f"### {status_icon} {wallet['name']} {type_badge}")
-            if wallet_address:
-                st.code(wallet_address, language=None)
-            st.caption(f"⛓️ {wallet.get('chain', 'base').upper()} | 🎯 {wallet.get('ai_profile', 'modere')}")
+        # Wallet address for real wallets
+        wallet_address = wallet.get('address', '')
+        if wallet_address:
+            st.code(wallet_address)
         
-        with col_value:
-            st.metric("💰 Valeur", f"${total_value:,.2f}")
-            st.caption(f"{len(positions)} positions | ${cash:,.2f} cash")
+        # Stats
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("💰 Valeur totale", f"${total_value:,.2f}")
+        col2.metric("💵 Cash", f"${cash:,.2f}")
+        col3.metric("📊 Positions", f"{len(positions)}/{wallet.get('max_positions', 10)}")
+        col4.metric("⛓️ Chain", wallet.get('chain', 'base').upper())
         
-        # Expandable config
-        with st.expander(f"⚙️ Configurer {wallet['name']}", expanded=False):
+        # Config expander
+        with st.expander("⚙️ Configuration"):
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
@@ -289,8 +232,7 @@ if wallets:
             col_save, col_reset, col_delete = st.columns([2, 1, 1])
             
             with col_save:
-                if st.button("💾 Sauvegarder", key=f"save_{wallet_id}", type="primary", use_container_width=True):
-                    # Update wallet config
+                if st.button("💾 Sauvegarder", key=f"save_{wallet_id}", type="primary"):
                     for w in config['wallets']:
                         if w['id'] == wallet_id:
                             w['ai_profile'] = new_profile
@@ -304,11 +246,11 @@ if wallets:
                             w['updated_at'] = datetime.now().isoformat()
                             break
                     save_wallets_config(config)
-                    st.success("✅ Config sauvegardée!")
+                    st.success("✅ Sauvegardé!")
                     st.rerun()
             
             with col_reset:
-                if is_sim and st.button("🔄 Reset", key=f"reset_{wallet_id}", use_container_width=True):
+                if is_sim and st.button("🔄 Reset", key=f"reset_{wallet_id}"):
                     initial = wallet.get('initial_capital', 10000)
                     save_wallet_data(wallet_id, {
                         'portfolio': {'USDC': initial},
@@ -320,107 +262,63 @@ if wallets:
                     st.rerun()
             
             with col_delete:
-                if st.button("🗑️ Supprimer", key=f"delete_{wallet_id}", use_container_width=True):
+                if st.button("🗑️ Supprimer", key=f"delete_{wallet_id}"):
                     st.session_state[f"confirm_delete_{wallet_id}"] = True
             
-            # Confirm delete
             if st.session_state.get(f"confirm_delete_{wallet_id}"):
-                st.warning(f"⚠️ Supprimer définitivement '{wallet['name']}' ?")
-                col_yes, col_no = st.columns(2)
-                with col_yes:
-                    if st.button("✅ Oui, supprimer", key=f"yes_del_{wallet_id}"):
-                        delete_wallet(wallet_id)
-                        del st.session_state[f"confirm_delete_{wallet_id}"]
-                        st.rerun()
-                with col_no:
-                    if st.button("❌ Non", key=f"no_del_{wallet_id}"):
-                        del st.session_state[f"confirm_delete_{wallet_id}"]
-                        st.rerun()
+                st.warning(f"⚠️ Supprimer '{wallet['name']}' ?")
+                c1, c2 = st.columns(2)
+                if c1.button("✅ Oui", key=f"yes_{wallet_id}"):
+                    delete_wallet(wallet_id)
+                    del st.session_state[f"confirm_delete_{wallet_id}"]
+                    st.rerun()
+                if c2.button("❌ Non", key=f"no_{wallet_id}"):
+                    del st.session_state[f"confirm_delete_{wallet_id}"]
+                    st.rerun()
         
-        st.markdown("")  # Spacing
+        st.divider()
 
 else:
-    st.info("📭 Aucun wallet configuré. Crée ton premier wallet ci-dessous!")
+    st.info("📭 Aucun wallet. Crée-en un ci-dessous!")
 
 # ========== CREATE WALLET ==========
-st.markdown("---")
 st.subheader("➕ Créer un Wallet")
 
 col1, col2 = st.columns(2)
 
 with col1:
-    # Simulation wallet
-    st.markdown("""
-    <div class="wallet-sim" style="text-align: center; padding: 25px;">
-        <div style="font-size: 2.5em;">🎮</div>
-        <div style="font-size: 1.3em; font-weight: bold; color: #fff;">Simulation</div>
-        <div style="color: #bbb;">Paper trading avec argent virtuel</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("### 🎮 Simulation")
+    st.caption("Paper trading avec argent virtuel")
     
     with st.form("create_sim"):
-        sim_name = st.text_input("Nom", value="Simulation", key="sim_name")
-        sim_capital = st.number_input("Capital initial ($)", min_value=100, max_value=1000000, value=10000, key="sim_capital")
-        sim_chain = st.selectbox("Chain", list(CHAINS.keys()), format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}", key="sim_chain")
+        sim_name = st.text_input("Nom", value="Simulation")
+        sim_capital = st.number_input("Capital initial ($)", min_value=100, max_value=1000000, value=10000)
+        sim_chain = st.selectbox("Chain", list(CHAINS.keys()), format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}")
         
-        if st.form_submit_button("🎮 Créer Simulation", type="primary", use_container_width=True):
-            wallet_id = create_wallet('paper', sim_name, sim_capital, sim_chain)
-            st.success(f"✅ Wallet simulation '{sim_name}' créé!")
+        if st.form_submit_button("🎮 Créer", type="primary"):
+            create_wallet('paper', sim_name, sim_capital, sim_chain)
+            st.success(f"✅ '{sim_name}' créé!")
             st.rerun()
 
 with col2:
-    # Real wallet
-    st.markdown("""
-    <div class="wallet-real" style="text-align: center; padding: 25px;">
-        <div style="font-size: 2.5em;">💳</div>
-        <div style="font-size: 1.3em; font-weight: bold; color: #fff;">Réel</div>
-        <div style="color: #bbb;">Trading avec vrais fonds</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("### 💳 Réel")
+    st.caption("Trading avec vrais fonds")
     
     with st.form("create_real"):
-        real_name = st.text_input("Nom", value="Mon Wallet", key="real_name")
+        real_name = st.text_input("Nom", value="Mon Wallet")
         real_chain = st.selectbox("Chain", list(CHAINS.keys()), format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}", key="real_chain")
-        real_address = st.text_input("Adresse (0x...)", placeholder="0x...", key="real_address")
+        real_address = st.text_input("Adresse (0x...)", placeholder="0x...")
         
-        if st.form_submit_button("💳 Créer Wallet Réel", use_container_width=True):
+        if st.form_submit_button("💳 Créer"):
             if real_address and real_address.startswith("0x") and len(real_address) == 42:
                 wallet_id = create_wallet('real', real_name, 0, real_chain)
-                # Update address
                 cfg = load_wallets_config()
                 for w in cfg['wallets']:
                     if w['id'] == wallet_id:
                         w['address'] = real_address
                         break
                 save_wallets_config(cfg)
-                st.success(f"✅ Wallet réel '{real_name}' créé!")
+                st.success(f"✅ '{real_name}' créé!")
                 st.rerun()
             else:
                 st.error("❌ Adresse invalide")
-
-# ========== LEGEND ==========
-st.markdown("---")
-with st.expander("ℹ️ Légende"):
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("""
-        <div class="wallet-sim" style="padding: 15px;">
-            🎮 <strong style="color:#fff;">Simulation</strong> <span style="color:#ccc;">= Paper trading (argent virtuel)</span>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div class="wallet-real" style="padding: 15px;">
-            💳 <strong style="color:#fff;">Réel</strong> <span style="color:#ccc;">= Trading avec vrais fonds</span>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    st.markdown("""
-    ### Profils de Risque
-    | Profil | Score Min | Trade % |
-    |--------|-----------|---------|
-    | 🛡️ Conservateur | 80 | 5% |
-    | ⚖️ Modéré | 65 | 10% |
-    | 🔥 Agressif | 50 | 20% |
-    | 🎰 Degen | 40 | 30% |
-    """)
