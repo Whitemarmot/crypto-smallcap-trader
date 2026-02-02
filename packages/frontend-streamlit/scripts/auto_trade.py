@@ -37,7 +37,8 @@ TAKE_PROFIT_PCT = 20    # +20% = vendre (fallback)
 STOP_LOSS_PCT = -15     # -15% = vendre (fallback)
 
 # Money Management
-MAX_POSITION_PCT = 10       # Max 10% du portfolio par position
+POSITION_UNIT_PCT = 5       # 1 position = 5% du portfolio
+MAX_POSITION_UNITS = 2      # Max 2 positions (10%) par token
 MAX_TOTAL_EXPOSURE_PCT = 80 # Max 80% investi (garder 20% cash)
 MIN_TRADE_USD = 10          # Minimum $10 par trade
 
@@ -230,11 +231,64 @@ def calculate_portfolio_value(sim, tokens_data: list = None) -> dict:
     }
 
 
-def calculate_position_size(portfolio_value: float, existing_position_value: float = 0) -> float:
-    """Calculate optimal position size based on money management rules"""
-    max_position = portfolio_value * (MAX_POSITION_PCT / 100)
-    available = max_position - existing_position_value
-    return max(0, min(available, portfolio_value * 0.05))  # 5% par trade par défaut
+def calculate_position_size(portfolio_value: float, confidence: int = 50, existing_position_value: float = 0) -> dict:
+    """
+    Calculate position size based on confidence and money management rules.
+    Returns: {'amount': float, 'units': float, 'units_label': str}
+    
+    Position sizing based on confidence:
+    - 90-100%: 2 positions
+    - 75-89%:  1.5 positions
+    - 60-74%:  1 position
+    - 45-59%:  0.5 position
+    - <45%:    0.25 position
+    """
+    one_position = portfolio_value * (POSITION_UNIT_PCT / 100)
+    
+    # Determine units based on confidence
+    if confidence >= 90:
+        units = 2.0
+    elif confidence >= 75:
+        units = 1.5
+    elif confidence >= 60:
+        units = 1.0
+    elif confidence >= 45:
+        units = 0.5
+    else:
+        units = 0.25
+    
+    # Cap at max units
+    units = min(units, MAX_POSITION_UNITS)
+    
+    # Calculate existing units for this position
+    existing_units = existing_position_value / one_position if one_position > 0 else 0
+    
+    # Available units to add
+    available_units = max(0, MAX_POSITION_UNITS - existing_units)
+    final_units = min(units, available_units)
+    
+    amount = final_units * one_position
+    
+    # Create label
+    if final_units >= 2:
+        label = "2 pos"
+    elif final_units >= 1.5:
+        label = "1½ pos"
+    elif final_units >= 1:
+        label = "1 pos"
+    elif final_units >= 0.5:
+        label = "½ pos"
+    elif final_units >= 0.25:
+        label = "¼ pos"
+    else:
+        label = "0 pos"
+    
+    return {
+        'amount': amount,
+        'units': final_units,
+        'units_label': label,
+        'one_position_usd': one_position
+    }
 
 
 def check_positions_for_sell(sim, fg_val, tokens_data: list = None):
@@ -417,8 +471,8 @@ def run_bot():
         # Load simulation
         sim = load_json(SIM_DB_PATH, {'portfolio': {'USD': 10000}, 'positions': {}, 'history': []})
         
-        # Get tokens early to use for price lookups
-        tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=50)
+        # Get tokens early to use for price lookups (fetch more for better analysis)
+        tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=200)
         
         # Pre-populate price cache with token data
         for t in tokens:
@@ -465,10 +519,13 @@ def run_bot():
             else:
                 log(f"Found {len(tokens)} tokens")
                 
-                # Build prompt
+                # Sort by 24h performance and build prompt with top performers
+                sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
+                log(f"📊 Analyzing {len(tokens)} tokens, showing top 30 by 24h performance")
+                
                 token_list = "\n".join([
                     f"- {t['symbol']}: ${t.get('price',0):.6f} | 24h: {t.get('price_change_24h',0) or 0:+.1f}% | MCap: ${(t.get('market_cap',0) or 0)/1e6:.1f}M"
-                    for t in tokens[:15]
+                    for t in sorted_tokens[:30]
                 ])
                 
                 prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions de trading.
@@ -538,24 +595,24 @@ Si aucune opportunité intéressante, réponds: []
                                 log(f"❌ Cannot get price for {sym}, skipping", "WARN")
                                 continue
                             
-                            # Money management: calculate position size
+                            # Money management: calculate position size based on confidence
                             existing_value = portfolio['details'].get(sym, {}).get('value', 0)
-                            max_amount = calculate_position_size(portfolio['total'], existing_value)
-                            amount = min(max_amount, portfolio['cash'] * (profile.trade_amount_pct / 100))
+                            pos_sizing = calculate_position_size(portfolio['total'], conf, existing_value)
+                            amount = min(pos_sizing['amount'], portfolio['cash'])
                             
-                            log(f"💰 Position sizing: max={max_amount:.2f}, profile_pct={profile.trade_amount_pct}%, final={amount:.2f}")
+                            log(f"💰 Position sizing: {pos_sizing['units_label']} ({pos_sizing['units']:.2f} units) = ${amount:.2f} (1 pos = ${pos_sizing['one_position_usd']:.2f})")
                             
-                            if amount >= MIN_TRADE_USD:
+                            if amount >= MIN_TRADE_USD and pos_sizing['units'] > 0:
                                 if execute_buy(sim, sym, amount, price, stop_loss, tp1, tp2):
                                     levels = ""
                                     if stop_loss:
                                         levels = f" | SL:${stop_loss:.4f} TP1:${tp1:.4f} TP2:${tp2:.4f}"
-                                    log(f"🟢 BUY {sym} ${amount:.2f} @ ${price:.6f} ({conf}%){levels}", "INFO", d)
+                                    log(f"🟢 BUY {sym} [{pos_sizing['units_label']}] ${amount:.2f} @ ${price:.6f} ({conf}%){levels}", "INFO", d)
                                     log(f"   Reason: {reason}")
-                                    executed.append(f"BUY:{sym}")
+                                    executed.append(f"BUY:{sym}({pos_sizing['units_label']})")
                                     portfolio['cash'] -= amount
                             else:
-                                log(f"⚠️ Amount too small: ${amount:.2f} < ${MIN_TRADE_USD}", "WARN")
+                                log(f"⚠️ Position too small or max reached: ${amount:.2f}, units={pos_sizing['units']:.2f}", "WARN")
                         else:
                             if act == 'BUY':
                                 log(f"⚠️ {sym} rejected: confidence {conf} < {profile.min_score}", "INFO")

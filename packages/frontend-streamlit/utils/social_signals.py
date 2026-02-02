@@ -377,76 +377,91 @@ def filter_by_market_cap(tokens: List[Dict], min_cap: float = 0, max_cap: float 
 def get_tokens_by_market_cap_cmc(min_cap: float = 0, max_cap: float = 0, limit: int = 100) -> List[Dict]:
     """
     Get tokens within a market cap range from CoinMarketCap.
-    Free tier doesn't support native filtering, but we paginate smartly.
+    Supports pagination to fetch more than 200 tokens.
     """
     if not CMC_API_KEY:
         return []
     
     # Estimate starting rank based on max_cap
-    # Rough mapping: rank 1-50 = >$1B, 50-200 = $100M-$1B, 200-800 = $1M-$100M
+    # Rough mapping: rank 1-50 = >$1B, 50-200 = $100M-$1B, 200-1000 = $1M-$100M
     if max_cap > 0 and max_cap <= 100_000_000:  # Small caps < $100M
-        start_rank = 200
+        start_rank = 150  # Start earlier to catch more
     elif max_cap > 0 and max_cap <= 1_000_000_000:  # Mid caps < $1B
         start_rank = 50
     else:
         start_rank = 1
     
     tokens = []
+    page_size = 200  # CMC free tier max per call
+    max_pages = 5    # Max 5 pages = 1000 tokens scanned
     
-    try:
-        rate_limit('cmc_listings')
+    for page in range(max_pages):
+        if len(tokens) >= limit:
+            break
+            
+        current_start = start_rank + (page * page_size)
         
-        resp = requests.get(
-            f'{CMC_BASE_URL}/cryptocurrency/listings/latest',
-            headers={
-                'X-CMC_PRO_API_KEY': CMC_API_KEY,
-                'Accept': 'application/json'
-            },
-            params={
-                'start': start_rank,
-                'limit': 200,  # CMC free tier max
-                'sort': 'market_cap',
-                'sort_dir': 'desc',
-                'convert': 'USD'
-            },
-            timeout=15
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        
-        for coin in data.get('data', []):
-            quote = coin.get('quote', {}).get('USD', {})
-            mcap = quote.get('market_cap', 0)
+        try:
+            rate_limit('cmc_listings')
             
-            if mcap is None or mcap == 0:
-                continue
+            resp = requests.get(
+                f'{CMC_BASE_URL}/cryptocurrency/listings/latest',
+                headers={
+                    'X-CMC_PRO_API_KEY': CMC_API_KEY,
+                    'Accept': 'application/json'
+                },
+                params={
+                    'start': current_start,
+                    'limit': page_size,
+                    'sort': 'market_cap',
+                    'sort_dir': 'desc',
+                    'convert': 'USD'
+                },
+                timeout=15
+            )
+            resp.raise_for_status()
+            data = resp.json()
             
-            # Filter by market cap range
-            if min_cap > 0 and mcap < min_cap:
-                continue
-            if max_cap > 0 and mcap > max_cap:
-                continue
+            coins_in_range = 0
+            for coin in data.get('data', []):
+                quote = coin.get('quote', {}).get('USD', {})
+                mcap = quote.get('market_cap', 0)
+                
+                if mcap is None or mcap == 0:
+                    continue
+                
+                # Filter by market cap range
+                if min_cap > 0 and mcap < min_cap:
+                    # If we're below min_cap, we've gone too far (sorted by mcap desc)
+                    continue
+                if max_cap > 0 and mcap > max_cap:
+                    continue
+                
+                coins_in_range += 1
+                tokens.append({
+                    'id': coin.get('slug'),
+                    'symbol': coin.get('symbol', '').upper(),
+                    'name': coin.get('name'),
+                    'market_cap': mcap,
+                    'market_cap_rank': coin.get('cmc_rank'),
+                    'price': quote.get('price'),
+                    'price_change_24h': quote.get('percent_change_24h'),
+                    'volume_24h': quote.get('volume_24h'),
+                    'image': None
+                })
+                
+                if len(tokens) >= limit:
+                    break
             
-            tokens.append({
-                'id': coin.get('slug'),
-                'symbol': coin.get('symbol', '').upper(),
-                'name': coin.get('name'),
-                'market_cap': mcap,
-                'market_cap_rank': coin.get('cmc_rank'),
-                'price': quote.get('price'),
-                'price_change_24h': quote.get('percent_change_24h'),
-                'volume_24h': quote.get('volume_24h'),
-                'image': None
-            })
-            
-            if len(tokens) >= limit:
+            # If no coins in range on this page, stop pagination
+            if coins_in_range == 0 and page > 0:
                 break
-        
-        return tokens
-        
-    except Exception as e:
-        print(f"CoinMarketCap error: {e}")
-        return []
+                
+        except Exception as e:
+            print(f"CoinMarketCap error (page {page}): {e}")
+            break
+    
+    return tokens[:limit]
 
 
 def get_tokens_by_market_cap(min_cap: float = 0, max_cap: float = 0, limit: int = 100) -> List[Dict]:
