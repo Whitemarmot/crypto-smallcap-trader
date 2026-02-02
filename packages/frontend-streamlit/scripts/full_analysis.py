@@ -147,11 +147,24 @@ def main():
     print("📋 Analyzing open positions...", file=sys.stderr)
     position_analysis = []
     for symbol, pos in positions.items():
+        entry_date = pos.get('entry_date', '')
+        entry_formatted = ''
+        holding_hours = 0
+        if entry_date:
+            try:
+                entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
+                entry_formatted = entry_dt.strftime('%d/%m %H:%M')
+                holding_hours = round((datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600, 1)
+            except:
+                entry_formatted = entry_date[:16] if len(entry_date) > 16 else entry_date
+        
         analysis = {
             'symbol': symbol,
             'amount': pos.get('amount', 0),
             'avg_price': pos.get('avg_price', 0),
-            'entry_date': pos.get('entry_date'),
+            'entry_date': entry_date,
+            'entry_formatted': entry_formatted,
+            'holding_hours': holding_hours,
             'stop_loss': pos.get('stop_loss'),
             'tp1': pos.get('tp1'),
             'tp2': pos.get('tp2'),
