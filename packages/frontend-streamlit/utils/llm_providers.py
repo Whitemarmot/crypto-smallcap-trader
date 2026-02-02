@@ -358,30 +358,48 @@ def call_openrouter(prompt: str, model: str = 'anthropic/claude-3-haiku') -> tup
         return None, 0, 0, int((time.time() - start) * 1000), str(e)
 
 
-def call_openclaw(prompt: str, model: str = 'openclaw:main') -> tuple:
-    """Call OpenClaw (Jean-Michel) API - Local gateway, no external API needed!"""
+def call_openclaw(prompt: str, model: str = 'openclaw:main', thinking: str = 'high') -> tuple:
+    """
+    Call OpenClaw (Jean-Michel) API - Local gateway with extended thinking!
+    thinking: 'off', 'low', 'medium', 'high' (high = more reasoning tokens)
+    """
     import time
     start = time.time()
     
     try:
+        # Build request with thinking mode
+        request_body = {
+            'model': model,
+            'messages': [{'role': 'user', 'content': prompt}]
+        }
+        
+        # Add thinking parameter if not 'off'
+        if thinking and thinking != 'off':
+            request_body['thinking'] = thinking
+        
         response = requests.post(
             f'{OPENCLAW_URL}/v1/chat/completions',
             headers={
                 'Content-Type': 'application/json',
                 'Authorization': f'Bearer {OPENCLAW_TOKEN}'
             },
-            json={
-                'model': model,
-                'messages': [{'role': 'user', 'content': prompt}]
-            },
-            timeout=120  # Longer timeout for complex analysis
+            json=request_body,
+            timeout=180  # Longer timeout for thinking mode
         )
         
         latency = int((time.time() - start) * 1000)
         
         if response.status_code == 200:
             data = response.json()
-            text = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            choice = data.get('choices', [{}])[0]
+            message = choice.get('message', {})
+            text = message.get('content', '')
+            
+            # Extract thinking if present
+            thinking_content = message.get('thinking', '')
+            if thinking_content:
+                print(f"[THINKING] {thinking_content[:500]}...")
+            
             usage = data.get('usage', {})
             return text, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), latency, None
         else:
@@ -391,14 +409,15 @@ def call_openclaw(prompt: str, model: str = 'openclaw:main') -> tuple:
         return None, 0, 0, int((time.time() - start) * 1000), str(e)
 
 
-def call_llm(prompt: str, provider: str, model: str) -> str:
+def call_llm(prompt: str, provider: str, model: str, thinking: str = 'high') -> str:
     """
     Universal LLM caller with logging
+    thinking: 'off', 'low', 'medium', 'high' (for providers that support it)
     Returns the response text
     """
     # Call the appropriate provider
     if provider == 'openclaw':
-        text, tokens_in, tokens_out, latency, error = call_openclaw(prompt, model)
+        text, tokens_in, tokens_out, latency, error = call_openclaw(prompt, model, thinking=thinking)
     elif provider == 'openrouter':
         text, tokens_in, tokens_out, latency, error = call_openrouter(prompt, model)
     elif provider == 'anthropic':

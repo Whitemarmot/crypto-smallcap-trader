@@ -571,10 +571,10 @@ Puis termine par un JSON array:
 Si aucune opportunité intéressante après analyse: `[]`
 """
                 
-                # Call AI
-                log(f"🧠 Calling {provider}...")
+                # Call AI with extended thinking
+                log(f"🧠 Calling {provider} (thinking=high)...")
                 model = LLM_MODELS.get(provider, {}).get('default', 'openclaw:main')
-                response = call_llm(prompt, provider, model)
+                response = call_llm(prompt, provider, model, thinking='high')
                 
                 if response:
                     # Extract reasoning (everything before JSON)
