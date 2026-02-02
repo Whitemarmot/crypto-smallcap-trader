@@ -1,6 +1,6 @@
 """
 📝 Trading Automatique
-Configure: Market Cap + Chain → L'IA fait le reste
+Configure: Market Cap + Chain + Fréquence → L'IA fait le reste
 """
 
 import streamlit as st
@@ -30,7 +30,9 @@ except ImportError as e:
     st.stop()
 
 # Paths
-SIM_DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'simulation.json')
+DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
+SIM_DB_PATH = os.path.join(DATA_DIR, 'simulation.json')
+BOT_CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
 
 # Market cap presets
 MCAP_PRESETS = {
@@ -47,6 +49,14 @@ CHAINS = {
     'bsc': '🟡 BSC',
 }
 
+FREQUENCIES = {
+    '15min': {'name': '⏱️ 15 minutes', 'cron': '*/15 * * * *', 'ms': 15*60*1000},
+    '1h': {'name': '⏱️ 1 heure', 'cron': '0 * * * *', 'ms': 60*60*1000},
+    '4h': {'name': '⏱️ 4 heures', 'cron': '0 */4 * * *', 'ms': 4*60*60*1000},
+    '1d': {'name': '⏱️ 1 jour', 'cron': '0 9 * * *', 'ms': 24*60*60*1000},
+    'off': {'name': '⏸️ Désactivé', 'cron': None, 'ms': 0},
+}
+
 
 def load_sim():
     if os.path.exists(SIM_DB_PATH):
@@ -56,9 +66,22 @@ def load_sim():
 
 
 def save_sim(data):
-    os.makedirs(os.path.dirname(SIM_DB_PATH), exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
     with open(SIM_DB_PATH, 'w') as f:
         json.dump(data, f, indent=2, default=str)
+
+
+def load_bot_config():
+    if os.path.exists(BOT_CONFIG_PATH):
+        with open(BOT_CONFIG_PATH, 'r') as f:
+            return json.load(f)
+    return {'enabled': False, 'frequency': 'off', 'mcap': 'small', 'chain': 'base', 'profile': 'modere', 'provider': 'openclaw'}
+
+
+def save_bot_config(cfg):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BOT_CONFIG_PATH, 'w') as f:
+        json.dump(cfg, f, indent=2)
 
 
 def get_price(symbol: str) -> float:
@@ -97,14 +120,15 @@ def trade(sim, action, symbol, amount_usd, price):
 
 # ========== PAGE ==========
 st.title("📝 Trading Auto")
-st.caption("Configure market cap + chain → L'IA analyse et trade")
+st.caption("Configure market cap + chain + fréquence → L'IA analyse et trade")
 
 sim = load_sim()
+bot_cfg = load_bot_config()
 config = load_config()
 providers = get_available_providers()
 
 # Portfolio summary
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 usd = sim['portfolio'].get('USD', 0)
 pos_val = sum(p['amount'] * get_price(s) for s, p in sim['positions'].items())
 total = usd + pos_val
@@ -112,6 +136,10 @@ total = usd + pos_val
 col1.metric("💰 Total", f"${total:,.0f}")
 col2.metric("💵 Cash", f"${usd:,.0f}")
 col3.metric("📈 Positions", len(sim['positions']))
+
+# Bot status
+bot_status = "🟢 Actif" if bot_cfg.get('enabled') and bot_cfg.get('frequency') != 'off' else "⏸️ Arrêté"
+col4.metric("🤖 Bot", bot_status)
 
 if sim['positions']:
     for s, p in sim['positions'].items():
@@ -122,54 +150,93 @@ if sim['positions']:
 st.markdown("---")
 
 # ========== CONFIG ==========
-st.subheader("⚙️ Configuration")
+st.subheader("⚙️ Configuration Bot")
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3 = st.columns(3)
 
 with c1:
-    mcap_key = st.selectbox("💰 Market Cap", list(MCAP_PRESETS.keys()), format_func=lambda x: MCAP_PRESETS[x]['name'], index=1)
+    mcap_key = st.selectbox("💰 Market Cap", list(MCAP_PRESETS.keys()), 
+                            format_func=lambda x: MCAP_PRESETS[x]['name'], 
+                            index=list(MCAP_PRESETS.keys()).index(bot_cfg.get('mcap', 'small')))
 
 with c2:
-    chain = st.selectbox("⛓️ Chain", list(CHAINS.keys()), format_func=lambda x: CHAINS[x])
+    chain = st.selectbox("⛓️ Chain", list(CHAINS.keys()), 
+                        format_func=lambda x: CHAINS[x],
+                        index=list(CHAINS.keys()).index(bot_cfg.get('chain', 'base')) if bot_cfg.get('chain', 'base') in CHAINS else 0)
 
 with c3:
-    profile = st.selectbox("🎯 Risque", list(AI_PROFILES.keys()), format_func=lambda x: AI_PROFILES[x].name, index=1)
+    profile = st.selectbox("🎯 Risque", list(AI_PROFILES.keys()), 
+                          format_func=lambda x: AI_PROFILES[x].name, 
+                          index=list(AI_PROFILES.keys()).index(bot_cfg.get('profile', 'modere')))
+
+c4, c5 = st.columns(2)
 
 with c4:
     if providers:
-        provider = st.selectbox("🤖 IA", list(providers.keys()), format_func=lambda x: LLM_MODELS[x]['icon'] + ' ' + LLM_MODELS[x]['name'].split('(')[0])
+        provider_list = list(providers.keys())
+        current_provider = bot_cfg.get('provider', 'openclaw')
+        provider_idx = provider_list.index(current_provider) if current_provider in provider_list else 0
+        provider = st.selectbox("🤖 IA", provider_list, 
+                               format_func=lambda x: LLM_MODELS[x]['icon'] + ' ' + LLM_MODELS[x]['name'].split('(')[0],
+                               index=provider_idx)
     else:
         provider = None
         st.warning("Aucune IA")
 
+with c5:
+    freq_list = list(FREQUENCIES.keys())
+    current_freq = bot_cfg.get('frequency', 'off')
+    freq_idx = freq_list.index(current_freq) if current_freq in freq_list else 4
+    frequency = st.selectbox("🔄 Fréquence", freq_list, 
+                            format_func=lambda x: FREQUENCIES[x]['name'],
+                            index=freq_idx)
+
+# Save config button
 st.markdown("---")
 
-# ========== RUN ==========
-if st.button("🚀 Analyser et Trader", type="primary", use_container_width=True):
-    if not provider:
-        st.error("Configure une IA d'abord")
-    else:
-        mcap = MCAP_PRESETS[mcap_key]
-        prof = AI_PROFILES[profile]
-        
-        # 1. Fear & Greed
-        with st.spinner("📊 Sentiment..."):
-            fg = get_fear_greed_index()
-            fg_val = fg.value if fg else 50
-        
-        # 2. Get tokens
-        with st.spinner("🔍 Tokens..."):
-            tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=20)
-            if not tokens:
-                st.warning("Aucun token trouvé pour ce range")
-                st.stop()
-        
-        st.info(f"😱 Fear & Greed: {fg_val} | 📋 {len(tokens)} tokens | 💰 {MCAP_PRESETS[mcap_key]['name']}")
-        
-        # 3. Build prompt
-        token_list = "\n".join([f"- {t['symbol']}: ${t.get('price',0):.4f} | 24h: {t.get('price_change_24h',0) or 0:+.1f}% | MCap: ${(t.get('market_cap',0) or 0)/1e6:.1f}M" for t in tokens[:15]])
-        
-        prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions.
+col_save, col_run = st.columns(2)
+
+with col_save:
+    if st.button("💾 Sauvegarder Config", use_container_width=True):
+        new_cfg = {
+            'enabled': frequency != 'off',
+            'frequency': frequency,
+            'mcap': mcap_key,
+            'chain': chain,
+            'profile': profile,
+            'provider': provider or 'openclaw',
+            'updated_at': datetime.now().isoformat()
+        }
+        save_bot_config(new_cfg)
+        st.success(f"✅ Config sauvegardée! Bot {'actif' if new_cfg['enabled'] else 'désactivé'}")
+        st.rerun()
+
+with col_run:
+    if st.button("🚀 Lancer Maintenant", type="primary", use_container_width=True):
+        if not provider:
+            st.error("Configure une IA d'abord")
+        else:
+            mcap = MCAP_PRESETS[mcap_key]
+            prof = AI_PROFILES[profile]
+            
+            # 1. Fear & Greed
+            with st.spinner("📊 Sentiment..."):
+                fg = get_fear_greed_index()
+                fg_val = fg.value if fg else 50
+            
+            # 2. Get tokens
+            with st.spinner("🔍 Tokens..."):
+                tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=20)
+                if not tokens:
+                    st.warning("Aucun token trouvé pour ce range")
+                    st.stop()
+            
+            st.info(f"😱 F&G: {fg_val} | 📋 {len(tokens)} tokens | 💰 {MCAP_PRESETS[mcap_key]['name']}")
+            
+            # 3. Build prompt
+            token_list = "\n".join([f"- {t['symbol']}: ${t.get('price',0):.4f} | 24h: {t.get('price_change_24h',0) or 0:+.1f}% | MCap: ${(t.get('market_cap',0) or 0)/1e6:.1f}M" for t in tokens[:15]])
+            
+            prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions.
 
 MARCHÉ: Fear & Greed = {fg_val}/100
 CHAIN: {chain}
@@ -188,52 +255,52 @@ Réponds UNIQUEMENT avec un JSON array:
 
 Si rien d'intéressant: []
 """
-        
-        # 4. Call AI
-        with st.spinner(f"🧠 {LLM_MODELS[provider]['name']} réfléchit..."):
-            model = LLM_MODELS[provider].get('default')
-            response = call_llm(prompt, provider, model)
-        
-        # 5. Parse & Execute
-        if response:
-            try:
-                import re
-                match = re.search(r'\[.*\]', response, re.DOTALL)
-                decisions = json.loads(match.group()) if match else []
-            except:
-                decisions = []
-                st.warning("Parse error")
             
-            if decisions:
-                st.subheader("📋 Décisions")
-                executed = []
+            # 4. Call AI
+            with st.spinner(f"🧠 {LLM_MODELS[provider]['name']} réfléchit..."):
+                model = LLM_MODELS[provider].get('default')
+                response = call_llm(prompt, provider, model)
+            
+            # 5. Parse & Execute
+            if response:
+                try:
+                    import re
+                    match = re.search(r'\[.*\]', response, re.DOTALL)
+                    decisions = json.loads(match.group()) if match else []
+                except:
+                    decisions = []
+                    st.warning("Parse error")
                 
-                for d in decisions:
-                    sym = d.get('symbol', '?')
-                    act = d.get('action', 'HOLD')
-                    conf = d.get('confidence', 0)
-                    reason = d.get('reason', '')
+                if decisions:
+                    st.subheader("📋 Décisions")
+                    executed = []
                     
-                    emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(act, '⚪')
-                    st.markdown(f"{emoji} **{act} {sym}** ({conf}%) - {reason}")
+                    for d in decisions:
+                        sym = d.get('symbol', '?')
+                        act = d.get('action', 'HOLD')
+                        conf = d.get('confidence', 0)
+                        reason = d.get('reason', '')
+                        
+                        emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(act, '⚪')
+                        st.markdown(f"{emoji} **{act} {sym}** ({conf}%) - {reason}")
+                        
+                        # Execute BUY if confidence >= min_score
+                        if act == 'BUY' and conf >= prof.min_score:
+                            price = get_price(sym)
+                            amount = usd * (prof.trade_amount_pct / 100)
+                            if amount >= 10 and price > 0:
+                                if trade(sim, 'BUY', sym, amount, price):
+                                    executed.append(sym)
+                                    usd -= amount
                     
-                    # Execute BUY if confidence >= min_score
-                    if act == 'BUY' and conf >= prof.min_score:
-                        price = get_price(sym)
-                        amount = usd * (prof.trade_amount_pct / 100)
-                        if amount >= 10 and price > 0:
-                            if trade(sim, 'BUY', sym, amount, price):
-                                executed.append(sym)
-                                usd -= amount
-                
-                if executed:
-                    save_sim(sim)
-                    st.success(f"✅ Acheté: {', '.join(executed)}")
-                    st.rerun()
+                    if executed:
+                        save_sim(sim)
+                        st.success(f"✅ Acheté: {', '.join(executed)}")
+                        st.rerun()
+                else:
+                    st.info("📭 Aucune opportunité selon l'IA")
             else:
-                st.info("📭 Aucune opportunité selon l'IA")
-        else:
-            st.error("❌ Pas de réponse IA")
+                st.error("❌ Pas de réponse IA")
 
 # ========== HISTORY ==========
 st.markdown("---")
@@ -244,6 +311,10 @@ with st.expander("📜 Historique"):
         st.caption(f"{h['ts'][:16]} {em} {h['action']} {h['symbol']} {h['qty']:.4f} @ ${h['price']:.4f}{pnl}")
 
 # Reset
-if st.button("🔄 Reset"):
+if st.button("🔄 Reset Simulation"):
     save_sim({'portfolio': {'USD': 10000}, 'positions': {}, 'history': []})
     st.rerun()
+
+# Info
+st.markdown("---")
+st.caption(f"💡 Le bot utilise la config sauvegardée. Fréquence actuelle: {FREQUENCIES.get(bot_cfg.get('frequency', 'off'), {}).get('name', 'off')}")
