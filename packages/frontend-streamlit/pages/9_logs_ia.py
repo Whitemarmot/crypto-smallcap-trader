@@ -37,9 +37,9 @@ if MODULES_OK:
         for i, (key, provider) in enumerate(available.items()):
             with cols[i]:
                 st.markdown(f"""
-                <div style="background: #2d2d44; padding: 15px; border-radius: 10px; text-align: center;">
+                <div style="background: #1e1e2e; padding: 15px; border-radius: 10px; text-align: center; border: 1px solid #444;">
                     <div style="font-size: 2rem;">{provider['icon']}</div>
-                    <div><strong>{provider['name']}</strong></div>
+                    <div style="color: #ffffff; font-weight: bold; font-size: 1.1rem;">{provider['name']}</div>
                     <div style="color: #00ff88;">✅ Connecté</div>
                 </div>
                 """, unsafe_allow_html=True)
