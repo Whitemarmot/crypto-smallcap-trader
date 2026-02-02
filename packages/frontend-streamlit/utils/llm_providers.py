@@ -18,6 +18,7 @@ ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY')
 GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')  # Gemini
 XAI_API_KEY = os.getenv('XAI_API_KEY')  # Grok
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')  # All models in one!
 
 # Log file path
 LOG_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'llm_logs.json')
@@ -39,6 +40,37 @@ class LLMLog:
 
 # Available models per provider
 LLM_MODELS = {
+    'openrouter': {
+        'name': 'OpenRouter (tous modèles)',
+        'icon': '🌐',
+        'models': {
+            # Claude
+            'anthropic/claude-3-haiku': 'Claude 3 Haiku (rapide)',
+            'anthropic/claude-3.5-sonnet': 'Claude 3.5 Sonnet',
+            'anthropic/claude-3-opus': 'Claude 3 Opus',
+            # GPT
+            'openai/gpt-4o-mini': 'GPT-4o Mini',
+            'openai/gpt-4o': 'GPT-4o',
+            'openai/gpt-4-turbo': 'GPT-4 Turbo',
+            # Gemini
+            'google/gemini-flash-1.5': 'Gemini 1.5 Flash',
+            'google/gemini-pro-1.5': 'Gemini 1.5 Pro',
+            # Grok
+            'x-ai/grok-beta': 'Grok Beta',
+            # Llama
+            'meta-llama/llama-3.1-70b-instruct': 'Llama 3.1 70B',
+            'meta-llama/llama-3.1-8b-instruct': 'Llama 3.1 8B (gratuit)',
+            # Mistral
+            'mistralai/mistral-large': 'Mistral Large',
+            'mistralai/mistral-7b-instruct': 'Mistral 7B (gratuit)',
+            # DeepSeek
+            'deepseek/deepseek-chat': 'DeepSeek Chat',
+            # Qwen
+            'qwen/qwen-2.5-72b-instruct': 'Qwen 2.5 72B',
+        },
+        'default': 'anthropic/claude-3-haiku',
+        'api_key_env': 'OPENROUTER_API_KEY'
+    },
     'anthropic': {
         'name': 'Claude (Anthropic)',
         'icon': '🟣',
@@ -89,6 +121,9 @@ def get_available_providers() -> Dict[str, Any]:
     """Get providers that have API keys configured"""
     available = {}
     
+    # OpenRouter first (recommended - all models in one)
+    if OPENROUTER_API_KEY:
+        available['openrouter'] = LLM_MODELS['openrouter']
     if ANTHROPIC_API_KEY:
         available['anthropic'] = LLM_MODELS['anthropic']
     if GOOGLE_API_KEY:
@@ -269,13 +304,51 @@ def call_openai(prompt: str, model: str = 'gpt-4o-mini') -> tuple:
         return None, 0, 0, int((time.time() - start) * 1000), str(e)
 
 
+def call_openrouter(prompt: str, model: str = 'anthropic/claude-3-haiku') -> tuple:
+    """Call OpenRouter API - Access all models with one key!"""
+    import time
+    start = time.time()
+    
+    try:
+        response = requests.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+                'HTTP-Referer': 'https://trader.lecoineur.com',
+                'X-Title': 'Crypto SmallCap Trader'
+            },
+            json={
+                'model': model,
+                'max_tokens': 1000,
+                'messages': [{'role': 'user', 'content': prompt}]
+            },
+            timeout=60
+        )
+        
+        latency = int((time.time() - start) * 1000)
+        
+        if response.status_code == 200:
+            data = response.json()
+            text = data.get('choices', [{}])[0].get('message', {}).get('content', '')
+            usage = data.get('usage', {})
+            return text, usage.get('prompt_tokens', 0), usage.get('completion_tokens', 0), latency, None
+        else:
+            return None, 0, 0, latency, f"Error {response.status_code}: {response.text}"
+            
+    except Exception as e:
+        return None, 0, 0, int((time.time() - start) * 1000), str(e)
+
+
 def call_llm(prompt: str, provider: str, model: str) -> str:
     """
     Universal LLM caller with logging
     Returns the response text
     """
     # Call the appropriate provider
-    if provider == 'anthropic':
+    if provider == 'openrouter':
+        text, tokens_in, tokens_out, latency, error = call_openrouter(prompt, model)
+    elif provider == 'anthropic':
         text, tokens_in, tokens_out, latency, error = call_anthropic(prompt, model)
     elif provider == 'google':
         text, tokens_in, tokens_out, latency, error = call_google(prompt, model)
