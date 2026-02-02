@@ -544,7 +544,7 @@ with tab_export:
     
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("👛 Wallets", stats['total_wallets'])
-    col2.metric("🎯 Stratégies", stats['active_strategies'])
+    col2.metric("📝 Simulation", stats['paper_trades'])
     col3.metric("📊 Trades", stats['total_trades'])
     col4.metric("⚡ Exécutions (24h)", stats['recent_trades_24h'])
     

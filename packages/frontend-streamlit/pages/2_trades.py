@@ -150,5 +150,5 @@ with nav_cols[2]:
         st.switch_page("pages/3_signals.py")
 
 with nav_cols[3]:
-    if st.button("🎯 Stratégies", use_container_width=True):
-        st.switch_page("pages/4_strategies.py")
+    if st.button("📝 Simulation", use_container_width=True):
+        st.switch_page("pages/8_simulation.py")

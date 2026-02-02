@@ -393,8 +393,8 @@ with cols[1]:
         st.switch_page("pages/1_wallet.py")
 
 with cols[2]:
-    if st.button("🎯 Stratégies", use_container_width=True):
-        st.switch_page("pages/4_strategies.py")
+    if st.button("📝 Simulation", use_container_width=True):
+        st.switch_page("pages/8_simulation.py")
 
 with cols[3]:
     if st.button("🐋 Whales", use_container_width=True):

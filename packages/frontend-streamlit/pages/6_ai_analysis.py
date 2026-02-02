@@ -355,7 +355,7 @@ with cols[1]:
         st.switch_page("pages/3_signals.py")
 with cols[2]:
     if st.button("🎯 Strategies", use_container_width=True):
-        st.switch_page("pages/4_strategies.py")
+        st.switch_page("pages/8_simulation.py")
 with cols[3]:
     if st.button("⚙️ Settings", use_container_width=True):
         st.switch_page("pages/5_settings.py")

@@ -65,7 +65,7 @@ st.markdown("---")
 # ========== FETCH REAL DATA ==========
 wallets = db.get_wallets()
 stats = db.get_portfolio_stats()
-active_strategies = db.get_active_strategies()
+paper_trades = db.get_paper_trades()
 recent_trades = db.get_trades(limit=10)
 
 # Calculate real portfolio value
@@ -114,9 +114,9 @@ with col2:
 
 with col3:
     st.metric(
-        label="🎯 Stratégies Actives",
-        value=str(stats['active_strategies']),
-        delta="En cours" if stats['active_strategies'] > 0 else "Aucune"
+        label="📝 Paper Trading",
+        value=str(stats['paper_trades']),
+        delta="En cours" if stats['paper_trades'] > 0 else "Aucune"
     )
 
 with col4:
@@ -209,10 +209,10 @@ st.markdown("---")
 col_strats, col_trades = st.columns(2)
 
 with col_strats:
-    st.subheader("🎯 Stratégies Actives")
+    st.subheader("📝 Paper Trading")
     
-    if active_strategies:
-        for strategy in active_strategies:
+    if paper_trades:
+        for strategy in paper_trades:
             wallet = next((w for w in wallets if w.id == strategy.wallet_id), None)
             wallet_name = wallet.name if wallet else "N/A"
             
@@ -238,7 +238,7 @@ with col_strats:
     else:
         st.info("🎯 Aucune stratégie active.")
         if st.button("➕ Créer une Stratégie", use_container_width=True):
-            st.switch_page("pages/4_strategies.py")
+            st.switch_page("pages/8_simulation.py")
 
 with col_trades:
     st.subheader("📜 Derniers Trades")
@@ -282,8 +282,8 @@ with action_cols[2]:
         st.switch_page("pages/3_signals.py")
 
 with action_cols[3]:
-    if st.button("🎯 Stratégies", use_container_width=True):
-        st.switch_page("pages/4_strategies.py")
+    if st.button("📝 Simulation", use_container_width=True):
+        st.switch_page("pages/8_simulation.py")
 
 with action_cols[4]:
     if st.button("⚙️ Settings", use_container_width=True):
