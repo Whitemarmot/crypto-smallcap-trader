@@ -166,12 +166,13 @@ def get_trending_tokens_on_chain(chain: str, min_liquidity: float = None,
 
 
 def get_top_gainers_on_chain(chain: str, min_liquidity: float = 50000,
-                              min_change: float = 3.0, limit: int = 20) -> List[Dict]:
+                              min_change: float = 3.0, limit: int = 20,
+                              max_mcap: float = 100_000_000) -> List[Dict]:
     """
     Get top gaining tokens on a specific chain
     Only includes tokens with positive momentum and good liquidity
     """
-    tokens = get_trending_tokens_on_chain(chain, min_liquidity, limit=100)
+    tokens = get_trending_tokens_on_chain(chain, min_liquidity, max_mcap=max_mcap, limit=100)
     
     # Filter for gainers only
     gainers = [t for t in tokens if t.get('price_change_24h', 0) >= min_change]

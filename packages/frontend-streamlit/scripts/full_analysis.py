@@ -261,11 +261,14 @@ def main():
     print(f"🔗 Fetching tokens directly from {main_chain} DEXes...", file=sys.stderr)
     try:
         from utils.chain_tokens import get_top_gainers_on_chain
+        # Use appropriate liquidity based on mcap tier
+        min_liq = 100000 if max_mcap > 100_000_000 else 30000
         chain_tokens = get_top_gainers_on_chain(
             chain=main_chain,
-            min_liquidity=30000,  # $30k min liquidity
+            min_liquidity=min_liq,
             min_change=-5.0,  # Include slightly negative too
-            limit=30
+            limit=50,
+            max_mcap=max_mcap  # Pass mcap filter from wallet config
         )
         print(f"✅ Found {len(chain_tokens)} tokens on {main_chain}", file=sys.stderr)
         
