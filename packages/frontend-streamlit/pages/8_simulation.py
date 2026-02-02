@@ -1,602 +1,370 @@
 """
-📝 Paper Trading - Mode Simulation
-Simule les décisions de trading sans risque
+📝 Trading Automatique - Paper Trading
+L'IA analyse, décide, et le système exécute
 """
 
 import streamlit as st
-import pandas as pd
-from datetime import datetime, timedelta
 import json
 import os
+import time
+from datetime import datetime
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-ai_path = os.path.join(os.path.dirname(__file__), '..', '..', 'ai-decision', 'python')
-sys.path.insert(0, ai_path)
 
 st.set_page_config(
-    page_title="📝 Simulation | SmallCap Trader",
+    page_title="📝 Trading Auto | SmallCap Trader",
     page_icon="📝",
     layout="wide"
 )
 
 # Imports
 try:
-    from utils.social_signals import (
-        get_fear_greed_index,
-        get_trending_tokens,
-        get_tokens_by_market_cap,
-        get_google_trends,
-        get_cryptopanic_sentiment
-    )
-    from utils.config import load_config, AI_PROFILES
-    from utils.ai_agent import analyze_token as ai_analyze_token, analyze_multiple_tokens
-    from utils.llm_providers import get_available_providers, LLM_MODELS
+    from utils.social_signals import get_fear_greed_index, get_trending_tokens, get_tokens_by_market_cap
+    from utils.config import load_config, AI_PROFILES, SUPPORTED_NETWORKS
+    from utils.llm_providers import get_available_providers, LLM_MODELS, call_llm
+    from utils.database import get_db
     import requests
     MODULES_OK = True
-    AI_AGENT_OK = True
 except ImportError as e:
     MODULES_OK = False
-    AI_AGENT_OK = False
     st.error(f"❌ Module error: {e}")
     st.stop()
 
-# Simulation database (JSON file)
+# Simulation database
 SIM_DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'simulation.json')
 
-def load_simulation_data():
-    """Load simulation state from JSON"""
+# Market cap presets
+MARKET_CAP_PRESETS = {
+    'micro_cap': {'min': 0, 'max': 1_000_000},
+    'small_cap': {'min': 1_000_000, 'max': 100_000_000},
+    'mid_cap': {'min': 100_000_000, 'max': 1_000_000_000},
+    'large_cap': {'min': 1_000_000_000, 'max': 0},
+    'all': {'min': 0, 'max': 0},
+}
+
+
+def load_sim():
     if os.path.exists(SIM_DB_PATH):
         with open(SIM_DB_PATH, 'r') as f:
             return json.load(f)
-    return {
-        'portfolio': {'USD': 10000.0},  # Start with $10k virtual
-        'positions': {},  # {symbol: {amount, avg_price, entry_date}}
-        'history': [],  # Trade history
-        'settings': {
-            'initial_capital': 10000.0,
-            'max_position_pct': 10.0,  # Max 10% per position
-            'auto_trade': False
-        }
-    }
+    return {'portfolio': {'USD': 10000}, 'positions': {}, 'history': [], 'settings': {'initial_capital': 10000}}
 
-def save_simulation_data(data):
-    """Save simulation state to JSON"""
+
+def save_sim(data):
     os.makedirs(os.path.dirname(SIM_DB_PATH), exist_ok=True)
     with open(SIM_DB_PATH, 'w') as f:
         json.dump(data, f, indent=2, default=str)
 
+
 def get_token_price(symbol: str) -> float:
-    """Get current price for a token from CoinGecko"""
+    """Get price from CoinGecko"""
     try:
-        # Map common symbols to CoinGecko IDs
         symbol_map = {
             'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana',
-            'PEPE': 'pepe', 'DOGE': 'dogecoin', 'SHIB': 'shiba-inu',
-            'XRP': 'ripple', 'ADA': 'cardano', 'AVAX': 'avalanche-2',
-            'LINK': 'chainlink', 'DOT': 'polkadot', 'MATIC': 'matic-network'
+            'PEPE': 'pepe', 'DOGE': 'dogecoin', 'XRP': 'ripple'
         }
         cg_id = symbol_map.get(symbol.upper(), symbol.lower())
-        
         resp = requests.get(
             f'https://api.coingecko.com/api/v3/simple/price',
             params={'ids': cg_id, 'vs_currencies': 'usd'},
             timeout=10
         )
-        data = resp.json()
-        return data.get(cg_id, {}).get('usd', 0)
+        return resp.json().get(cg_id, {}).get('usd', 0)
     except:
         return 0
 
-def execute_sim_trade(sim_data: dict, action: str, symbol: str, amount_usd: float, price: float) -> dict:
-    """Execute a simulated trade"""
-    timestamp = datetime.now().isoformat()
+
+def execute_trade(sim_data: dict, action: str, symbol: str, amount_usd: float, price: float) -> dict:
+    """Execute simulated trade"""
+    ts = datetime.now().isoformat()
     
     if action == 'BUY':
         if sim_data['portfolio'].get('USD', 0) < amount_usd:
-            return {'error': 'Insufficient USD balance'}
+            return {'error': 'Pas assez de USD'}
         
-        # Deduct USD
         sim_data['portfolio']['USD'] -= amount_usd
-        
-        # Add position
         token_amount = amount_usd / price if price > 0 else 0
+        
         if symbol in sim_data['positions']:
-            # Average up/down
-            existing = sim_data['positions'][symbol]
-            total_amount = existing['amount'] + token_amount
-            total_cost = (existing['amount'] * existing['avg_price']) + amount_usd
-            sim_data['positions'][symbol] = {
-                'amount': total_amount,
-                'avg_price': total_cost / total_amount if total_amount > 0 else 0,
-                'entry_date': existing['entry_date']
-            }
+            pos = sim_data['positions'][symbol]
+            total = pos['amount'] + token_amount
+            cost = (pos['amount'] * pos['avg_price']) + amount_usd
+            sim_data['positions'][symbol] = {'amount': total, 'avg_price': cost / total, 'entry_date': pos['entry_date']}
         else:
-            sim_data['positions'][symbol] = {
-                'amount': token_amount,
-                'avg_price': price,
-                'entry_date': timestamp
-            }
+            sim_data['positions'][symbol] = {'amount': token_amount, 'avg_price': price, 'entry_date': ts}
         
-        sim_data['history'].append({
-            'timestamp': timestamp,
-            'action': 'BUY',
-            'symbol': symbol,
-            'amount': token_amount,
-            'price': price,
-            'total_usd': amount_usd
-        })
-        
+        sim_data['history'].append({'ts': ts, 'action': 'BUY', 'symbol': symbol, 'amount': token_amount, 'price': price, 'usd': amount_usd})
+        return {'success': True}
+    
     elif action == 'SELL':
         if symbol not in sim_data['positions']:
-            return {'error': f'No {symbol} position to sell'}
+            return {'error': f'Pas de position {symbol}'}
         
-        position = sim_data['positions'][symbol]
-        sell_amount = min(position['amount'], amount_usd / price if price > 0 else 0)
+        pos = sim_data['positions'][symbol]
+        sell_amount = pos['amount']
         sell_value = sell_amount * price
+        pnl = (price - pos['avg_price']) * sell_amount
         
-        # Add USD
         sim_data['portfolio']['USD'] += sell_value
+        del sim_data['positions'][symbol]
         
-        # Update or remove position
-        position['amount'] -= sell_amount
-        if position['amount'] <= 0.0001:
-            del sim_data['positions'][symbol]
-        
-        # Calculate PnL
-        pnl = (price - position['avg_price']) * sell_amount
-        pnl_pct = ((price / position['avg_price']) - 1) * 100 if position['avg_price'] > 0 else 0
-        
-        sim_data['history'].append({
-            'timestamp': timestamp,
-            'action': 'SELL',
-            'symbol': symbol,
-            'amount': sell_amount,
-            'price': price,
-            'total_usd': sell_value,
-            'pnl': pnl,
-            'pnl_pct': pnl_pct
-        })
+        sim_data['history'].append({'ts': ts, 'action': 'SELL', 'symbol': symbol, 'amount': sell_amount, 'price': price, 'usd': sell_value, 'pnl': pnl})
+        return {'success': True, 'pnl': pnl}
     
-    return {'success': True}
+    return {'error': 'Action inconnue'}
 
-def calculate_portfolio_value(sim_data: dict) -> dict:
-    """Calculate total portfolio value"""
-    usd_balance = sim_data['portfolio'].get('USD', 0)
-    positions_value = 0
-    position_details = []
+
+def build_analysis_prompt(tokens_data: list, profile: str, fg_value: int) -> str:
+    """Build prompt for AI analysis"""
+    token_list = "\n".join([
+        f"- {t['symbol']}: ${t.get('price', 0):.6f} | 24h: {t.get('change_24h', 0):+.1f}% | MCap: ${t.get('market_cap', 0)/1e6:.1f}M"
+        for t in tokens_data[:15]
+    ])
     
-    for symbol, pos in sim_data['positions'].items():
-        current_price = get_token_price(symbol)
-        value = pos['amount'] * current_price
-        pnl = (current_price - pos['avg_price']) * pos['amount']
-        pnl_pct = ((current_price / pos['avg_price']) - 1) * 100 if pos['avg_price'] > 0 else 0
-        
-        positions_value += value
-        position_details.append({
-            'symbol': symbol,
-            'amount': pos['amount'],
-            'avg_price': pos['avg_price'],
-            'current_price': current_price,
-            'value': value,
-            'pnl': pnl,
-            'pnl_pct': pnl_pct
-        })
-    
-    total_value = usd_balance + positions_value
-    initial = sim_data['settings']['initial_capital']
-    total_pnl = total_value - initial
-    total_pnl_pct = ((total_value / initial) - 1) * 100 if initial > 0 else 0
-    
-    return {
-        'usd_balance': usd_balance,
-        'positions_value': positions_value,
-        'total_value': total_value,
-        'total_pnl': total_pnl,
-        'total_pnl_pct': total_pnl_pct,
-        'positions': position_details
+    profile_desc = {
+        'conservateur': 'Très prudent, uniquement les opportunités évidentes (score 80+)',
+        'modere': 'Équilibré entre risque et opportunité (score 65+)',
+        'agressif': 'Prendre plus de risques pour plus de gains (score 50+)',
+        'degen': 'YOLO mode, on cherche les moonshots (score 40+)'
     }
+    
+    return f"""Tu es un trader crypto. Analyse ces tokens et donne tes décisions.
+
+## Contexte marché
+- Fear & Greed Index: {fg_value}/100
+
+## Tokens à analyser
+{token_list}
+
+## Ton profil de trading: {profile.upper()}
+{profile_desc.get(profile, 'Modéré')}
+
+## Instructions
+Pour chaque token intéressant, donne ta décision.
+Réponds UNIQUEMENT avec un JSON array (pas de texte avant/après):
+
+[
+  {{"symbol": "XXX", "action": "BUY", "confidence": 75, "reason": "..."}},
+  {{"symbol": "YYY", "action": "HOLD", "confidence": 50, "reason": "..."}}
+]
+
+Si aucun token n'est intéressant, retourne un array vide: []
+Actions possibles: BUY, SELL, HOLD
+"""
 
 
 # ==================== PAGE ====================
 
-st.title("📝 Paper Trading")
-st.caption("Mode simulation - Testez vos stratégies sans risque")
+st.title("📝 Trading Automatique")
+st.caption("L'IA analyse → décide → le système exécute")
 
-# Load simulation data
-sim_data = load_simulation_data()
+config = load_config()
+sim_data = load_sim()
+db = get_db()
 
-# Tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "📊 Portfolio", 
-    "🤖 Auto-Décisions",
-    "📜 Historique",
-    "⚙️ Paramètres"
-])
+# Get wallets with configs
+wallets = db.get_wallets()
+wallet_configs = []
 
-# ============ TAB 1: Portfolio ============
-with tab1:
-    st.subheader("💼 Portfolio Virtuel")
+for w in wallets:
+    cfg = config.trading.wallets.get(w.address, {})
+    if cfg.get('enabled', True):
+        wallet_configs.append({
+            'name': w.name,
+            'address': w.address,
+            'profile': cfg.get('ai_profile', 'modere'),
+            'provider': cfg.get('llm_provider', 'openclaw'),
+            'mcap_preset': cfg.get('market_cap_preset', 'small_cap'),
+            'network': cfg.get('network', w.network)
+        })
+
+# ========== PORTFOLIO ==========
+st.subheader("💼 Portfolio Simulation")
+
+col1, col2, col3, col4 = st.columns(4)
+
+usd = sim_data['portfolio'].get('USD', 0)
+positions_value = sum(p['amount'] * get_token_price(s) for s, p in sim_data['positions'].items())
+total = usd + positions_value
+initial = sim_data['settings'].get('initial_capital', 10000)
+pnl = total - initial
+
+col1.metric("💰 Total", f"${total:,.2f}", f"{(pnl/initial)*100:+.1f}%")
+col2.metric("💵 USD", f"${usd:,.2f}")
+col3.metric("📈 Positions", f"${positions_value:,.2f}")
+col4.metric("🎯 Trades", len(sim_data['history']))
+
+# Show positions
+if sim_data['positions']:
+    st.markdown("**Positions ouvertes:**")
+    for symbol, pos in sim_data['positions'].items():
+        price = get_token_price(symbol)
+        pnl = (price - pos['avg_price']) * pos['amount']
+        pnl_pct = ((price / pos['avg_price']) - 1) * 100 if pos['avg_price'] > 0 else 0
+        color = "green" if pnl >= 0 else "red"
+        st.markdown(f"- **{symbol}**: {pos['amount']:.4f} @ ${pos['avg_price']:.4f} → ${price:.4f} (:{color}[{pnl:+.2f}$ / {pnl_pct:+.1f}%])")
+
+st.markdown("---")
+
+# ========== WALLET SELECTOR ==========
+st.subheader("🎯 Lancer une analyse")
+
+if not wallet_configs:
+    st.warning("⚠️ Configure d'abord un wallet dans la page Wallets")
+else:
+    selected_wallet = st.selectbox(
+        "Wallet",
+        options=range(len(wallet_configs)),
+        format_func=lambda i: f"{wallet_configs[i]['name']} ({wallet_configs[i]['profile']})"
+    )
     
-    # Calculate values
-    portfolio = calculate_portfolio_value(sim_data)
+    wc = wallet_configs[selected_wallet]
     
-    # Main metrics
+    # Show config
     col1, col2, col3, col4 = st.columns(4)
+    col1.caption(f"🎯 {AI_PROFILES[wc['profile']].name}")
+    col2.caption(f"🤖 {LLM_MODELS.get(wc['provider'], {}).get('name', wc['provider'])}")
+    col3.caption(f"💰 {wc['mcap_preset']}")
+    col4.caption(f"⛓️ {wc['network']}")
     
-    with col1:
-        st.metric(
-            "💰 Valeur Totale",
-            f"${portfolio['total_value']:,.2f}",
-            f"{portfolio['total_pnl']:+,.2f} ({portfolio['total_pnl_pct']:+.1f}%)"
-        )
+    # Auto-execute toggle
+    auto_execute = st.toggle("⚡ Exécuter automatiquement les trades", value=True)
     
-    with col2:
-        st.metric("💵 USD Disponible", f"${portfolio['usd_balance']:,.2f}")
-    
-    with col3:
-        st.metric("📈 En Positions", f"${portfolio['positions_value']:,.2f}")
-    
-    with col4:
-        st.metric("🎯 Positions", len(sim_data['positions']))
-    
-    st.markdown("---")
-    
-    # Positions table
-    if portfolio['positions']:
-        st.subheader("📊 Positions Ouvertes")
+    # Run analysis
+    if st.button("🚀 Analyser et Trader", type="primary", use_container_width=True):
+        profile = AI_PROFILES[wc['profile']]
+        mcap = MARKET_CAP_PRESETS.get(wc['mcap_preset'], MARKET_CAP_PRESETS['small_cap'])
         
-        for pos in portfolio['positions']:
-            pnl_color = "green" if pos['pnl'] >= 0 else "red"
+        # 1. Get Fear & Greed
+        with st.spinner("📊 Récupération Fear & Greed..."):
+            fg = get_fear_greed_index()
+            fg_value = fg.value if fg else 50
+            st.caption(f"😱 Fear & Greed: {fg_value}")
+        
+        # 2. Get tokens
+        with st.spinner("🔍 Récupération des tokens..."):
+            tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=20)
             
-            cols = st.columns([1, 1, 1, 1, 1, 2])
-            cols[0].markdown(f"**{pos['symbol']}**")
-            cols[1].markdown(f"{pos['amount']:.4f}")
-            cols[2].markdown(f"${pos['avg_price']:.4f}")
-            cols[3].markdown(f"${pos['current_price']:.4f}")
-            cols[4].markdown(f"${pos['value']:.2f}")
-            cols[5].markdown(f":{pnl_color}[{pos['pnl']:+.2f}$ ({pos['pnl_pct']:+.1f}%)]")
-    else:
-        st.info("📭 Aucune position ouverte")
-    
-    st.markdown("---")
-    
-    # Manual trade
-    st.subheader("🔧 Trade Manuel")
-    
-    mcol1, mcol2, mcol3 = st.columns(3)
-    
-    with mcol1:
-        manual_symbol = st.text_input("Symbol", value="ETH").upper()
-    
-    with mcol2:
-        manual_amount = st.number_input("Montant USD", min_value=10.0, value=100.0, step=10.0)
-    
-    with mcol3:
-        manual_action = st.selectbox("Action", ["BUY", "SELL"])
-    
-    if st.button(f"🚀 {manual_action} {manual_symbol}", type="primary"):
-        price = get_token_price(manual_symbol)
-        if price > 0:
-            result = execute_sim_trade(sim_data, manual_action, manual_symbol, manual_amount, price)
-            if 'error' in result:
-                st.error(result['error'])
+            if not tokens:
+                # Fallback to trending
+                trending = get_trending_tokens()
+                if trending:
+                    tokens = [{'symbol': t.symbol, 'name': t.name, 'price': 0, 'change_24h': 0, 'market_cap': 0} for t in trending[:15]]
+            
+            # Enrich with prices
+            for t in tokens[:10]:
+                if not t.get('price'):
+                    t['price'] = get_token_price(t['symbol'])
+            
+            st.caption(f"📋 {len(tokens)} tokens à analyser")
+        
+        # 3. Ask AI
+        with st.spinner(f"🧠 {LLM_MODELS.get(wc['provider'], {}).get('name', 'IA')} analyse..."):
+            prompt = build_analysis_prompt(tokens, wc['profile'], fg_value)
+            
+            provider = wc['provider']
+            model = LLM_MODELS.get(provider, {}).get('default', 'openclaw:main')
+            
+            response = call_llm(prompt, provider, model)
+            
+            if response:
+                st.caption("✅ Réponse IA reçue")
+                
+                # Parse response
+                try:
+                    import re
+                    json_match = re.search(r'\[.*\]', response, re.DOTALL)
+                    if json_match:
+                        decisions = json.loads(json_match.group())
+                    else:
+                        decisions = []
+                except:
+                    decisions = []
+                    st.warning("⚠️ Impossible de parser la réponse IA")
             else:
-                save_simulation_data(sim_data)
-                st.success(f"✅ {manual_action} {manual_symbol} @ ${price:.4f}")
-                st.rerun()
-        else:
-            st.error(f"❌ Prix non trouvé pour {manual_symbol}")
-
-
-# ============ TAB 2: Auto-Decisions ============
-with tab2:
-    st.subheader("🤖 Décisions Automatiques")
-    st.caption("L'IA analyse les tokens et exécute les trades automatiquement")
-    
-    # Settings row
-    settings_col1, settings_col2, settings_col3 = st.columns(3)
-    
-    with settings_col1:
-        auto_execute = st.toggle("⚡ Auto-exécuter les trades", value=True, help="Exécute automatiquement les BUY après analyse")
-    
-    with settings_col2:
-        trade_amount = st.number_input("💵 Montant par trade ($)", min_value=10, max_value=1000, value=100, step=10)
-    
-    with settings_col3:
-        min_score = st.number_input("🎯 Score minimum", min_value=50, max_value=90, value=65, step=5)
-    
-    st.markdown("---")
-    
-    # Current signals
-    fg = get_fear_greed_index()
-    fg_value = fg.value if fg else 50
-    
-    if fg:
-        fg_color = "#ff4444" if fg.value <= 25 else "#ff8844" if fg.value <= 45 else "#ffff44" if fg.value <= 55 else "#88ff44"
-        st.markdown(f"😱 **Fear & Greed:** {fg.value} ({fg.classification})")
-    
-    # LLM Provider selection
-    available_providers = get_available_providers()
-    
-    llm_col1, llm_col2, llm_col3 = st.columns(3)
-    
-    with llm_col1:
-        if available_providers:
-            provider_options = list(available_providers.keys())
-            selected_provider = st.selectbox(
-                "🧠 Modèle IA",
-                options=provider_options,
-                format_func=lambda x: f"{LLM_MODELS[x]['icon']} {LLM_MODELS[x]['name']}",
-                index=0
-            )
-        else:
-            selected_provider = None
-            st.warning("⚠️ Aucune clé API configurée")
-    
-    with llm_col2:
-        if selected_provider:
-            model_options = list(LLM_MODELS[selected_provider]['models'].keys())
-            selected_model = st.selectbox(
-                "📦 Version",
-                options=model_options,
-                format_func=lambda x: LLM_MODELS[selected_provider]['models'][x],
-                index=0
-            )
-        else:
-            selected_model = None
-            st.caption("Mode: règles simples")
-    
-    with llm_col3:
-        selected_profile = st.selectbox(
-            "🎯 Profil trading",
-            options=list(AI_PROFILES.keys()),
-            format_func=lambda x: AI_PROFILES[x].name,
-            index=1  # Default: modere
-        )
-    
-    # Show profile info
-    profile_info = AI_PROFILES[selected_profile]
-    st.caption(f"📊 Score min: {profile_info.min_score} | Trade: {profile_info.trade_amount_pct}% | Max positions: {profile_info.max_positions}")
-    
-    # Analyze trending tokens
-    if st.button("🚀 Analyser et Trader (IA)", type="primary", use_container_width=True):
+                decisions = []
+                st.error("❌ Pas de réponse de l'IA")
         
-        with st.spinner("Récupération des tokens trending..."):
-            trending = get_trending_tokens()
-        
-        if not trending:
-            st.warning("Impossible de charger les tokens trending")
-        else:
-            decisions = []
-            executed_trades = []
-            progress = st.progress(0)
+        # 4. Show decisions and execute
+        if decisions:
+            st.markdown("### 📋 Décisions IA")
             
-            symbols = [t.symbol for t in trending[:10]]
-            
-            for i, token in enumerate(trending[:10]):
-                progress.progress((i + 1) / 10, text=f"🧠 IA analyse {token.symbol}...")
+            executed = []
+            for d in decisions:
+                symbol = d.get('symbol', '?')
+                action = d.get('action', 'HOLD')
+                confidence = d.get('confidence', 50)
+                reason = d.get('reason', '')
                 
-                # Use AI Agent for decision
-                ai_decision = ai_analyze_token(
-                    token.symbol, 
-                    selected_profile,
-                    provider=selected_provider or 'anthropic',
-                    model=selected_model
-                )
+                emoji = {'BUY': '🟢', 'SELL': '🔴', 'HOLD': '🟡'}.get(action, '⚪')
                 
-                if not ai_decision or not ai_decision.price:
-                    continue
+                cols = st.columns([1, 2, 1, 4])
+                cols[0].markdown(f"{emoji} **{action}**")
+                cols[1].markdown(f"**{symbol}**")
+                cols[2].markdown(f"{confidence}%")
+                cols[3].caption(reason)
                 
-                decision = {
-                    'symbol': ai_decision.symbol,
-                    'name': token.name,
-                    'price': ai_decision.price,
-                    'action': ai_decision.action,
-                    'score': ai_decision.confidence,
-                    'reason': ai_decision.reasoning,
-                    'target_price': ai_decision.target_price,
-                    'stop_loss': ai_decision.stop_loss,
-                    'executed': False
-                }
-                
-                # Auto-execute if enabled and score is high enough
-                if auto_execute and action == "BUY" and score >= min_score:
-                    usd_available = sim_data['portfolio'].get('USD', 0)
-                    if usd_available >= trade_amount:
-                        result = execute_sim_trade(sim_data, 'BUY', token.symbol, trade_amount, price)
-                        if 'error' not in result:
-                            decision['executed'] = True
-                            executed_trades.append(token.symbol)
-                
-                # Auto-sell if we have position and signal is SELL
-                if auto_execute and action == "SELL" and token.symbol in sim_data['positions']:
-                    pos = sim_data['positions'][token.symbol]
-                    sell_value = pos['amount'] * price
-                    result = execute_sim_trade(sim_data, 'SELL', token.symbol, sell_value, price)
-                    if 'error' not in result:
-                        decision['executed'] = True
-                        executed_trades.append(f"SELL {token.symbol}")
-                
-                decisions.append(decision)
-            
-            progress.empty()
-            
-            # Save if trades were executed
-            if executed_trades:
-                save_simulation_data(sim_data)
-                st.success(f"✅ {len(executed_trades)} trades exécutés: {', '.join(executed_trades)}")
-            
-            # Store decisions
-            st.session_state['sim_decisions'] = decisions
-    
-    # Quick action buttons
-    col_btn1, col_btn2 = st.columns(2)
-    
-    with col_btn1:
-        if st.button("📥 Exécuter tous les BUY", use_container_width=True):
-            if 'sim_decisions' in st.session_state:
-                executed = []
-                for d in st.session_state['sim_decisions']:
-                    if d['action'] == 'BUY' and d['score'] >= min_score and not d.get('executed'):
-                        usd_available = sim_data['portfolio'].get('USD', 0)
-                        if usd_available >= trade_amount:
-                            result = execute_sim_trade(sim_data, 'BUY', d['symbol'], trade_amount, d['price'])
-                            if 'error' not in result:
-                                executed.append(d['symbol'])
-                                d['executed'] = True
-                if executed:
-                    save_simulation_data(sim_data)
-                    st.success(f"✅ Acheté: {', '.join(executed)}")
-                    st.rerun()
-                else:
-                    st.warning("Aucun trade à exécuter (score trop bas ou pas assez d'USD)")
-    
-    with col_btn2:
-        if st.button("📤 Vendre toutes les positions", use_container_width=True):
-            if sim_data['positions']:
-                sold = []
-                for symbol, pos in list(sim_data['positions'].items()):
+                # Execute if auto-execute and confidence >= profile min
+                if auto_execute and action == 'BUY' and confidence >= profile.min_score:
                     price = get_token_price(symbol)
                     if price > 0:
-                        sell_value = pos['amount'] * price
-                        result = execute_sim_trade(sim_data, 'SELL', symbol, sell_value, price)
-                        if 'error' not in result:
-                            sold.append(symbol)
-                if sold:
-                    save_simulation_data(sim_data)
-                    st.success(f"✅ Vendu: {', '.join(sold)}")
-                    st.rerun()
-            else:
-                st.warning("Aucune position à vendre")
-    
-    st.markdown("---")
-    
-    # Display decisions
-    if 'sim_decisions' in st.session_state:
-        decisions = st.session_state['sim_decisions']
-        
-        st.markdown(f"### 📋 {len(decisions)} Décisions")
-        
-        for d in sorted(decisions, key=lambda x: x['score'], reverse=True):
-            action_emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}.get(d['action'], "⚪")
-            executed_mark = "✅" if d.get('executed') else ""
+                        trade_amount = usd * (profile.trade_amount_pct / 100)
+                        trade_amount = min(trade_amount, usd)  # Don't exceed available
+                        
+                        if trade_amount >= 10:
+                            result = execute_trade(sim_data, 'BUY', symbol, trade_amount, price)
+                            if result.get('success'):
+                                executed.append(f"BUY {symbol}")
+                                usd -= trade_amount
+                
+                elif auto_execute and action == 'SELL' and symbol in sim_data['positions']:
+                    price = get_token_price(symbol)
+                    if price > 0:
+                        result = execute_trade(sim_data, 'SELL', symbol, 0, price)
+                        if result.get('success'):
+                            executed.append(f"SELL {symbol}")
             
-            cols = st.columns([1, 2, 1, 1, 3, 1])
-            cols[0].markdown(f"{action_emoji} {executed_mark}")
-            cols[1].markdown(f"**{d['symbol']}**")
-            cols[2].markdown(f"${d['price']:.4f}")
-            cols[3].markdown(f"**{d['score']}**/100")
-            cols[4].caption(d['reason'])
-            
-            # Execute button for BUY signals (if not already executed)
-            if d['action'] == 'BUY' and not d.get('executed'):
-                if cols[5].button("💰", key=f"buy_{d['symbol']}", help=f"Buy {d['symbol']}"):
-                    result = execute_sim_trade(sim_data, 'BUY', d['symbol'], trade_amount, d['price'])
-                    if 'error' not in result:
-                        save_simulation_data(sim_data)
-                        st.success(f"✅ Bought {d['symbol']}")
-                        st.rerun()
-            elif d.get('executed'):
-                cols[5].markdown("✅")
+            if executed:
+                save_sim(sim_data)
+                st.success(f"✅ Exécuté: {', '.join(executed)}")
+                st.rerun()
+        else:
+            st.info("📭 Aucune décision de l'IA")
 
+# ========== HISTORY ==========
+st.markdown("---")
+st.subheader("📜 Historique")
 
-# ============ TAB 3: History ============
-with tab3:
-    st.subheader("📜 Historique des Trades")
-    
-    history = sim_data.get('history', [])
-    
-    if history:
-        # Reverse to show newest first
-        for trade in reversed(history[-50:]):
-            action_emoji = "🟢" if trade['action'] == 'BUY' else "🔴"
-            
-            cols = st.columns([1, 1, 2, 1, 1, 2])
-            cols[0].markdown(trade['timestamp'][:10])
-            cols[1].markdown(f"{action_emoji} {trade['action']}")
-            cols[2].markdown(f"**{trade['symbol']}**")
-            cols[3].markdown(f"{trade['amount']:.4f}")
-            cols[4].markdown(f"${trade['price']:.4f}")
-            
-            if trade['action'] == 'SELL' and 'pnl' in trade:
-                pnl_color = "green" if trade['pnl'] >= 0 else "red"
-                cols[5].markdown(f":{pnl_color}[{trade['pnl']:+.2f}$ ({trade['pnl_pct']:+.1f}%)]")
-            else:
-                cols[5].markdown(f"${trade['total_usd']:.2f}")
-        
-        # Stats
-        st.markdown("---")
-        buys = [t for t in history if t['action'] == 'BUY']
-        sells = [t for t in history if t['action'] == 'SELL']
-        
-        wins = len([s for s in sells if s.get('pnl', 0) > 0])
-        losses = len([s for s in sells if s.get('pnl', 0) < 0])
-        
-        scol1, scol2, scol3 = st.columns(3)
-        scol1.metric("Total Trades", len(history))
-        scol2.metric("Wins/Losses", f"{wins}/{losses}")
-        if wins + losses > 0:
-            scol3.metric("Win Rate", f"{wins/(wins+losses)*100:.1f}%")
-    else:
-        st.info("📭 Aucun trade effectué")
+history = sim_data.get('history', [])[-20:][::-1]
+if history:
+    for h in history:
+        emoji = '🟢' if h['action'] == 'BUY' else '🔴'
+        pnl_str = f" → PnL: {h.get('pnl', 0):+.2f}$" if 'pnl' in h else ""
+        st.caption(f"{h['ts'][:16]} | {emoji} {h['action']} {h['symbol']} | {h['amount']:.4f} @ ${h['price']:.4f}{pnl_str}")
+else:
+    st.caption("Aucun trade")
 
-
-# ============ TAB 4: Settings ============
-with tab4:
-    st.subheader("⚙️ Paramètres Simulation")
-    
-    new_capital = st.number_input(
-        "Capital Initial ($)",
-        min_value=100.0,
-        value=float(sim_data['settings']['initial_capital']),
-        step=1000.0
-    )
-    
-    new_max_pos = st.slider(
-        "Max % par position",
-        min_value=1.0,
-        max_value=50.0,
-        value=float(sim_data['settings']['max_position_pct']),
-        step=1.0
-    )
-    
-    if st.button("💾 Sauvegarder"):
-        sim_data['settings']['initial_capital'] = new_capital
-        sim_data['settings']['max_position_pct'] = new_max_pos
-        save_simulation_data(sim_data)
-        st.success("✅ Paramètres sauvegardés")
-    
-    st.markdown("---")
-    
-    if st.button("🔄 Reset Simulation", type="secondary"):
-        sim_data = {
-            'portfolio': {'USD': new_capital},
-            'positions': {},
-            'history': [],
-            'settings': {
-                'initial_capital': new_capital,
-                'max_position_pct': new_max_pos,
-                'auto_trade': False
-            }
-        }
-        save_simulation_data(sim_data)
-        st.success("✅ Simulation réinitialisée")
-        st.rerun()
-
+# Reset
+st.markdown("---")
+if st.button("🔄 Reset simulation"):
+    sim_data = {'portfolio': {'USD': 10000}, 'positions': {}, 'history': [], 'settings': {'initial_capital': 10000}}
+    save_sim(sim_data)
+    st.success("Reset!")
+    st.rerun()
 
 # Navigation
 st.markdown("---")
 cols = st.columns(4)
 with cols[0]:
-    if st.button("🏠 Dashboard", use_container_width=True):
-        st.switch_page("pages/0_dashboard.py")
+    if st.button("👛 Wallets", use_container_width=True):
+        st.switch_page("pages/1_wallet.py")
 with cols[1]:
-    if st.button("🤖 AI Analysis", use_container_width=True):
-        st.switch_page("pages/6_ai_analysis.py")
+    if st.button("📜 Logs IA", use_container_width=True):
+        st.switch_page("pages/9_logs_ia.py")
 with cols[2]:
     if st.button("📡 Signals", use_container_width=True):
         st.switch_page("pages/3_signals.py")
 with cols[3]:
-    if st.button("⚙️ Settings", use_container_width=True):
-        st.switch_page("pages/5_settings.py")
+    if st.button("🏠 Dashboard", use_container_width=True):
+        st.switch_page("pages/0_dashboard.py")
