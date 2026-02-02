@@ -125,21 +125,50 @@ def get_daily_trade_count():
 
 
 def get_price(symbol: str) -> float:
-    """Get current price from CoinGecko"""
+    """Get current price from CoinGecko with fallback search"""
     import requests
     try:
+        # Extended mappings
         maps = {
             'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana',
             'PEPE': 'pepe', 'DOGE': 'dogecoin', 'XRP': 'ripple',
-            'ADA': 'cardano', 'AVAX': 'avalanche-2', 'LINK': 'chainlink'
+            'ADA': 'cardano', 'AVAX': 'avalanche-2', 'LINK': 'chainlink',
+            'DOT': 'polkadot', 'MATIC': 'matic-network', 'SHIB': 'shiba-inu',
+            'UNI': 'uniswap', 'ATOM': 'cosmos', 'LTC': 'litecoin',
+            'BRETT': 'brett', 'XVG': 'verge', 'SUI': 'sui',
+            'ARB': 'arbitrum', 'OP': 'optimism', 'APT': 'aptos',
+            'INJ': 'injective-protocol', 'SEI': 'sei-network',
+            'WIF': 'dogwifcoin', 'BONK': 'bonk', 'FLOKI': 'floki',
+            'YFI': 'yearn-finance', 'KSM': 'kusama', 'ZRX': '0x',
+            'CKB': 'nervos-network', 'RVN': 'ravencoin', 'CORE': 'coredaoorg',
         }
         cg_id = maps.get(symbol.upper(), symbol.lower())
+        
         r = requests.get(
             'https://api.coingecko.com/api/v3/simple/price',
             params={'ids': cg_id, 'vs_currencies': 'usd'},
             timeout=10
         )
-        return r.json().get(cg_id, {}).get('usd', 0)
+        price = r.json().get(cg_id, {}).get('usd', 0)
+        
+        # Fallback: search if not found
+        if price == 0:
+            search = requests.get(
+                'https://api.coingecko.com/api/v3/search',
+                params={'query': symbol},
+                timeout=10
+            )
+            coins = search.json().get('coins', [])
+            if coins:
+                cg_id = coins[0]['id']
+                r = requests.get(
+                    'https://api.coingecko.com/api/v3/simple/price',
+                    params={'ids': cg_id, 'vs_currencies': 'usd'},
+                    timeout=10
+                )
+                price = r.json().get(cg_id, {}).get('usd', 0)
+        
+        return price
     except Exception as e:
         log(f"Price fetch error: {e}", "WARN")
         return 0
