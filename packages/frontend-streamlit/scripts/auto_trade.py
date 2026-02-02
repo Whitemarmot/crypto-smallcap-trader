@@ -32,7 +32,7 @@ STATE_PATH = os.path.join(DATA_DIR, 'bot_state.json')
 
 # Config
 COOLDOWN_SECONDS = 300  # 5 min minimum entre runs
-MAX_DAILY_TRADES = 10
+MAX_DAILY_TRADES = 20  # Augmenté pour tester
 TAKE_PROFIT_PCT = 20    # +20% = vendre (fallback)
 STOP_LOSS_PCT = -15     # -15% = vendre (fallback)
 
