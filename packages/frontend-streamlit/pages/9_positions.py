@@ -11,6 +11,12 @@ import os
 import requests
 from datetime import datetime
 
+st.set_page_config(
+    page_title="📊 Positions | SmallCap Trader",
+    page_icon="📊",
+    layout="wide"
+)
+
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data'))
 WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
 WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
@@ -19,8 +25,6 @@ HISTORY_PATH = os.path.join(DATA_DIR, 'position_history.json')
 CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
 CMC_API_KEY = '849ddcc694a049708d0b5392486d6eaa'
 
-# Debug paths on load
-import sys
 
 def load_json(path, default):
     try:
@@ -31,10 +35,12 @@ def load_json(path, default):
         pass
     return default
 
+
 def save_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, 'w') as f:
         json.dump(data, f, indent=2, default=str)
+
 
 def get_current_price(symbol):
     """Get current price from CMC API"""
@@ -51,6 +57,7 @@ def get_current_price(symbol):
     except Exception as e:
         st.error(f"Erreur prix {symbol}: {e}")
     return 0
+
 
 def close_position(symbol, wallet_path, reason="manual_close"):
     """Close a position at current market price"""
@@ -132,20 +139,23 @@ def close_position(symbol, wallet_path, reason="manual_close"):
     pnl_emoji = "🟢" if pnl_usd >= 0 else "🔴"
     return True, f"{pnl_emoji} {symbol} vendu @ ${price:.6f} | P&L: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
 
-st.set_page_config(page_title="📊 Positions", layout="wide")
+
+# ========== TITRE ==========
 st.title("📊 Suivi des Positions")
 
-# Load wallets config
+# ========== CHARGEMENT DONNÉES ==========
 wallets_config = load_json(WALLETS_CONFIG, {'wallets': [], 'active_wallet': 'simulation'})
 wallets = {w['id']: w for w in wallets_config.get('wallets', [])}
+wallet_list = wallets_config.get('wallets', [])
 active_wallet_id = wallets_config.get('active_wallet', 'simulation')
 
-# Sidebar: Wallet selector
-st.sidebar.header("💼 Wallet")
-wallet_list = wallets_config.get('wallets', [])
+# ========== SIDEBAR FILTRES ==========
+st.sidebar.header("🔍 Filtres")
 
+# Filtre par wallet
+st.sidebar.subheader("💼 Wallet")
 if wallet_list:
-    wallet_options = {w['id']: w['name'] for w in wallet_list}
+    wallet_options = {w['id']: f"{w['name']} ({'🎮 Sim' if w.get('type', 'paper') in ['paper', 'simulation'] else '💳 Réel'})" for w in wallet_list}
     wallet_ids = list(wallet_options.keys())
     
     # Find index of active wallet
@@ -164,19 +174,29 @@ else:
     selected_wallet_id = 'simulation'
     st.sidebar.info("Aucun wallet configuré")
 
-# Load wallet data - try multiple paths
+# Filtre par statut P&L
+st.sidebar.subheader("💰 Filtre P&L")
+pnl_filter = st.sidebar.radio(
+    "Afficher",
+    options=["Toutes", "🟢 Positives", "🔴 Négatives"],
+    index=0,
+    horizontal=True
+)
+
+# ========== CONFIG WALLET (SIDEBAR) ==========
+st.sidebar.divider()
+st.sidebar.header("⚙️ Config Wallet")
+
+# Load wallet data
 wallet_path = os.path.join(WALLETS_DIR, f'{selected_wallet_id}.json')
 sim = None
 
-# Try wallet path first
 if os.path.exists(wallet_path):
     sim = load_json(wallet_path, None)
 
-# Fallback to legacy path
 if not sim and os.path.exists(SIM_PATH):
     sim = load_json(SIM_PATH, None)
 
-# Default empty
 if not sim:
     sim = {'portfolio': {'USDC': 0}, 'positions': {}, 'history': []}
 
@@ -189,38 +209,16 @@ position_size_pct = wallet_cfg.get('position_size_pct', 5)
 stop_loss_pct = wallet_cfg.get('stop_loss_pct', 15)
 take_profit_pct = wallet_cfg.get('take_profit_pct', 20)
 
-positions = sim.get('positions', {})
-
-# Header stats
-col1, col2, col3, col4 = st.columns(4)
-with col1:
-    st.metric("Positions ouvertes", f"{len(positions)}/{max_positions}")
-with col2:
-    total_value = sum(p.get('amount', 0) * p.get('avg_price', 0) for p in positions.values())
-    st.metric("Valeur totale", f"${total_value:,.2f}")
-with col3:
-    cash = sim.get('portfolio', {}).get('USDC', 0)
-    st.metric("Cash disponible", f"${cash:,.2f}")
-with col4:
-    exposure = (total_value / (total_value + cash) * 100) if (total_value + cash) > 0 else 0
-    st.metric("Exposure", f"{exposure:.1f}%")
-
-st.divider()
-
-# Sidebar: Wallet configuration
-st.sidebar.header("⚙️ Config Wallet")
 new_max = st.sidebar.number_input("Max positions", min_value=1, max_value=20, value=max_positions, key="max_pos")
 new_size = st.sidebar.number_input("Taille position (%)", min_value=1, max_value=25, value=position_size_pct, key="pos_size")
 new_sl = st.sidebar.number_input("Stop Loss (%)", min_value=5, max_value=50, value=stop_loss_pct, key="sl")
 new_tp = st.sidebar.number_input("Take Profit (%)", min_value=5, max_value=100, value=take_profit_pct, key="tp")
 
-# Check for changes
 config_changed = (new_max != max_positions or new_size != position_size_pct or 
                   new_sl != stop_loss_pct or new_tp != take_profit_pct)
 
 if config_changed:
-    if st.sidebar.button("💾 Sauvegarder"):
-        # Update wallet config
+    if st.sidebar.button("💾 Sauvegarder Config"):
         for w in wallets_config['wallets']:
             if w['id'] == selected_wallet_id:
                 w['max_positions'] = new_max
@@ -233,78 +231,219 @@ if config_changed:
         st.sidebar.success("✅ Config sauvegardée!")
         st.rerun()
 
-if not positions:
-    st.info("🔹 Aucune position ouverte. Le bot va en créer lors de sa prochaine exécution.")
+positions = sim.get('positions', {})
+
+# Filtrer les positions selon le P&L
+def filter_positions(positions_dict, history_data):
+    """Filtre les positions selon le filtre P&L"""
+    if pnl_filter == "Toutes":
+        return positions_dict
+    
+    filtered = {}
+    for symbol, pos in positions_dict.items():
+        hist = history_data.get('snapshots', {}).get(symbol, [])
+        if hist:
+            pnl_pct = hist[-1].get('pnl_pct', 0)
+        else:
+            pnl_pct = 0
+        
+        if pnl_filter == "🟢 Positives" and pnl_pct >= 0:
+            filtered[symbol] = pos
+        elif pnl_filter == "🔴 Négatives" and pnl_pct < 0:
+            filtered[symbol] = pos
+    
+    return filtered
+
+filtered_positions = filter_positions(positions, history)
+
+# ========== STATS RÉSUMÉES ==========
+st.subheader("📊 Statistiques")
+
+# Calcul des stats
+total_value = sum(p.get('amount', 0) * p.get('avg_price', 0) for p in positions.values())
+cash = sim.get('portfolio', {}).get('USDC', 0)
+exposure = (total_value / (total_value + cash) * 100) if (total_value + cash) > 0 else 0
+
+# Calcul du P&L total actuel
+total_current_value = 0
+total_entry_value = 0
+for symbol, pos in positions.items():
+    amount = pos.get('amount', 0)
+    avg_price = pos.get('avg_price', 0)
+    hist = history.get('snapshots', {}).get(symbol, [])
+    if hist:
+        current_price = hist[-1].get('price', avg_price)
+    else:
+        current_price = avg_price
+    total_current_value += amount * current_price
+    total_entry_value += amount * avg_price
+
+total_unrealized_pnl = total_current_value - total_entry_value
+total_pnl_pct = ((total_current_value / total_entry_value) - 1) * 100 if total_entry_value > 0 else 0
+
+# Meilleure et pire position
+positions_pnl = []
+for symbol, pos in positions.items():
+    hist = history.get('snapshots', {}).get(symbol, [])
+    if hist:
+        pnl_pct = hist[-1].get('pnl_pct', 0)
+        positions_pnl.append((symbol, pnl_pct))
+
+best_pos = max(positions_pnl, key=lambda x: x[1]) if positions_pnl else None
+worst_pos = min(positions_pnl, key=lambda x: x[1]) if positions_pnl else None
+
+# Affichage stats
+col1, col2, col3, col4, col5 = st.columns(5)
+
+with col1:
+    st.metric("📈 Positions Ouvertes", f"{len(positions)}/{max_positions}")
+    
+with col2:
+    st.metric("💵 Valeur Totale", f"${total_current_value:,.2f}")
+
+with col3:
+    st.metric("💰 Cash Disponible", f"${cash:,.2f}")
+
+with col4:
+    st.metric("📊 Exposition", f"{exposure:.1f}%")
+
+with col5:
+    delta_color = "normal" if total_unrealized_pnl >= 0 else "inverse"
+    st.metric("💰 P&L Non Réalisé", f"${total_unrealized_pnl:+,.2f}", delta=f"{total_pnl_pct:+.1f}%", delta_color=delta_color)
+
+# Best/Worst positions
+if best_pos or worst_pos:
+    col_best, col_worst = st.columns(2)
+    
+    with col_best:
+        if best_pos and best_pos[1] > 0:
+            st.success(f"🏆 **Meilleure position:** {best_pos[0]} → **{best_pos[1]:+.1f}%**")
+        elif best_pos:
+            st.info(f"🏆 Meilleure position: {best_pos[0]} → {best_pos[1]:+.1f}%")
+    
+    with col_worst:
+        if worst_pos and worst_pos[1] < 0:
+            st.error(f"💀 **Pire position:** {worst_pos[0]} → **{worst_pos[1]:+.1f}%**")
+        elif worst_pos:
+            st.info(f"💀 Pire position: {worst_pos[0]} → {worst_pos[1]:+.1f}%")
+
+st.divider()
+
+# ========== POSITIONS ==========
+if not filtered_positions:
+    if not positions:
+        st.info("🔹 Aucune position ouverte. Le bot va en créer lors de sa prochaine exécution.")
+    else:
+        st.info("🔍 Aucune position ne correspond aux filtres sélectionnés.")
 else:
-    # Position cards
-    st.subheader("📈 Positions actuelles")
+    st.subheader(f"📈 Positions actuelles ({len(filtered_positions)})")
     
     # Handle close confirmations
     if 'confirm_close' not in st.session_state:
         st.session_state.confirm_close = None
     
-    cols = st.columns(min(len(positions), 3))
-    for i, (symbol, pos) in enumerate(positions.items()):
-        with cols[i % 3]:
-            amount = pos.get('amount', 0)
-            avg_price = pos.get('avg_price', 0)
-            value = amount * avg_price
-            
-            # Get latest price from history
-            hist = history.get('snapshots', {}).get(symbol, [])
-            if hist:
-                latest = hist[-1]
-                current_price = latest.get('price', avg_price)
-                pnl_pct = latest.get('pnl_pct', 0)
-            else:
-                current_price = avg_price
-                pnl_pct = 0
-            
-            current_value = amount * current_price
-            pnl_emoji = "🟢" if pnl_pct >= 0 else "🔴"
-            
-            # Format entry date
-            entry_date = pos.get('entry_date', '')
-            entry_str = ""
-            holding_str = ""
-            if entry_date:
-                try:
-                    entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
-                    entry_str = entry_dt.strftime('%d/%m %H:%M')
-                    holding_hours = (datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600
-                    if holding_hours < 1:
-                        holding_str = f"{int(holding_hours * 60)}min"
-                    elif holding_hours < 24:
-                        holding_str = f"{holding_hours:.1f}h"
-                    else:
-                        holding_str = f"{holding_hours / 24:.1f}j"
-                except:
-                    entry_str = entry_date[:16]
-            
-            st.markdown(f"""
-            **{symbol}** {pnl_emoji} {pnl_pct:+.2f}%
-            - 📅 Entrée: `{entry_str}` ({holding_str})
-            - Quantité: `{amount:,.4f}`
-            - Prix moyen: `${avg_price:.6f}`
-            - Prix actuel: `${current_price:.6f}`
-            - Valeur: `${current_value:,.2f}`
-            """)
-            
-            # Show TP/SL if set
-            if pos.get('stop_loss') or pos.get('tp1'):
-                sl = pos.get('stop_loss', 0)
-                tp1 = pos.get('tp1', 0)
-                tp2 = pos.get('tp2', 0)
-                st.caption(f"SL: ${sl:.6f} | TP1: ${tp1:.6f} | TP2: ${tp2:.6f}")
-            
-            # Close button
-            if st.session_state.confirm_close == symbol:
-                # Confirmation mode
-                st.warning(f"⚠️ Fermer {symbol} au prix marché ?")
+    # Préparer données pour le tableau
+    positions_data = []
+    for symbol, pos in filtered_positions.items():
+        amount = pos.get('amount', 0)
+        avg_price = pos.get('avg_price', 0)
+        entry_value = amount * avg_price
+        
+        # Get latest price from history
+        hist = history.get('snapshots', {}).get(symbol, [])
+        if hist:
+            latest = hist[-1]
+            current_price = latest.get('price', avg_price)
+            pnl_pct = latest.get('pnl_pct', 0)
+        else:
+            current_price = avg_price
+            pnl_pct = 0
+        
+        current_value = amount * current_price
+        pnl_usd = current_value - entry_value
+        
+        # Format entry date
+        entry_date = pos.get('entry_date', '')
+        entry_str = ""
+        holding_str = ""
+        if entry_date:
+            try:
+                entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
+                entry_str = entry_dt.strftime('%d/%m %H:%M')
+                holding_hours = (datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600
+                if holding_hours < 1:
+                    holding_str = f"{int(holding_hours * 60)}min"
+                elif holding_hours < 24:
+                    holding_str = f"{holding_hours:.1f}h"
+                else:
+                    holding_str = f"{holding_hours / 24:.1f}j"
+            except:
+                entry_str = entry_date[:16]
+        
+        positions_data.append({
+            "symbol": symbol,
+            "🪙 Token": symbol,
+            "📅 Entrée": entry_str,
+            "⏱️ Durée": holding_str,
+            "📦 Quantité": f"{amount:,.4f}",
+            "💵 Prix Entrée": f"${avg_price:.6f}",
+            "💵 Prix Actuel": f"${current_price:.6f}",
+            "💰 Valeur": f"${current_value:,.2f}",
+            "📈 P&L ($)": f"${pnl_usd:+.2f}",
+            "📊 P&L (%)": f"{pnl_pct:+.1f}%",
+            "pnl_pct_raw": pnl_pct,  # Pour le tri
+        })
+    
+    # Créer le DataFrame
+    df_positions = pd.DataFrame(positions_data)
+    
+    # Coloriser le P&L
+    def color_pnl_cell(val):
+        if isinstance(val, str):
+            try:
+                num_str = val.replace('$', '').replace('%', '').replace(',', '').replace('+', '')
+                num = float(num_str)
+                if num > 0:
+                    return "color: #00FF88; font-weight: bold"
+                elif num < 0:
+                    return "color: #FF4444; font-weight: bold"
+            except:
+                pass
+        return ""
+    
+    # Afficher les colonnes visibles seulement
+    display_cols = ["🪙 Token", "📅 Entrée", "⏱️ Durée", "📦 Quantité", "💵 Prix Entrée", "💵 Prix Actuel", "💰 Valeur", "📈 P&L ($)", "📊 P&L (%)"]
+    
+    st.dataframe(
+        df_positions[display_cols].style.applymap(color_pnl_cell, subset=["📈 P&L ($)", "📊 P&L (%)"]),
+        use_container_width=True,
+        hide_index=True,
+        height=min(400, 50 + len(positions_data) * 35)
+    )
+    
+    # ========== ACTIONS SUR POSITIONS ==========
+    st.subheader("🎮 Actions")
+    
+    # Sélection de position pour fermeture
+    position_symbols = list(filtered_positions.keys())
+    
+    col_select, col_action = st.columns([2, 1])
+    
+    with col_select:
+        selected_to_close = st.selectbox(
+            "Sélectionner une position à fermer",
+            options=["-- Choisir --"] + position_symbols,
+            key="select_close"
+        )
+    
+    with col_action:
+        if selected_to_close and selected_to_close != "-- Choisir --":
+            if st.session_state.confirm_close == selected_to_close:
+                st.warning(f"⚠️ Confirmer fermeture de {selected_to_close} ?")
                 col_yes, col_no = st.columns(2)
                 with col_yes:
-                    if st.button("✅ Oui", key=f"yes_{symbol}"):
-                        success, msg = close_position(symbol, wallet_path, reason="manual_close")
+                    if st.button("✅ Oui", key="yes_close"):
+                        success, msg = close_position(selected_to_close, wallet_path, reason="manual_close")
                         if success:
                             st.success(msg)
                             st.session_state.confirm_close = None
@@ -312,24 +451,24 @@ else:
                         else:
                             st.error(msg)
                 with col_no:
-                    if st.button("❌ Non", key=f"no_{symbol}"):
+                    if st.button("❌ Non", key="no_close"):
                         st.session_state.confirm_close = None
                         st.rerun()
             else:
-                if st.button(f"🔻 Fermer", key=f"close_{symbol}"):
-                    st.session_state.confirm_close = symbol
+                if st.button(f"🔻 Fermer {selected_to_close}", key="btn_close"):
+                    st.session_state.confirm_close = selected_to_close
                     st.rerun()
     
     st.divider()
     
-    # Charts
+    # ========== GRAPHIQUES ==========
     st.subheader("📉 Évolution des positions")
     
     if not history.get('snapshots'):
         st.warning("⏳ Pas encore d'historique. Les données seront collectées à chaque exécution du bot.")
     else:
         # Select position to view
-        selected = st.selectbox("Choisir une position", list(positions.keys()))
+        selected = st.selectbox("Choisir une position", position_symbols, key="chart_select")
         
         if selected and selected in history['snapshots']:
             snapshots = history['snapshots'][selected]
@@ -381,41 +520,73 @@ else:
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
-                # Stats
+                # Stats du graphique
                 col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.metric("Min", f"${df['price'].min():.6f}")
+                    st.metric("📉 Prix Min", f"${df['price'].min():.6f}")
                 with col2:
-                    st.metric("Max", f"${df['price'].max():.6f}")
+                    st.metric("📈 Prix Max", f"${df['price'].max():.6f}")
                 with col3:
-                    st.metric("PnL min", f"{df['pnl_pct'].min():+.2f}%")
+                    min_pnl = df['pnl_pct'].min()
+                    st.metric("💀 P&L Min", f"{min_pnl:+.2f}%")
                 with col4:
-                    st.metric("PnL max", f"{df['pnl_pct'].max():+.2f}%")
+                    max_pnl = df['pnl_pct'].max()
+                    st.metric("🏆 P&L Max", f"{max_pnl:+.2f}%")
         
         # All positions PnL comparison
-        st.divider()
-        st.subheader("📊 Comparaison PnL - Toutes positions")
-        
-        pnl_data = []
-        for symbol in positions.keys():
-            if symbol in history['snapshots'] and history['snapshots'][symbol]:
-                latest = history['snapshots'][symbol][-1]
-                pnl_data.append({
-                    'Symbol': symbol,
-                    'PnL %': latest.get('pnl_pct', 0),
-                    'Valeur $': latest.get('value', 0)
-                })
-        
-        if pnl_data:
-            df_pnl = pd.DataFrame(pnl_data)
+        if len(positions) > 1:
+            st.divider()
+            st.subheader("📊 Comparaison P&L - Toutes positions")
             
-            fig_bar = px.bar(df_pnl, x='Symbol', y='PnL %', 
-                            color='PnL %',
-                            color_continuous_scale=['#FF4444', '#FFAA00', '#00FF88'],
-                            title="PnL par position")
-            fig_bar.update_layout(template="plotly_dark", height=400)
-            st.plotly_chart(fig_bar, use_container_width=True)
+            pnl_data = []
+            for symbol in positions.keys():
+                if symbol in history['snapshots'] and history['snapshots'][symbol]:
+                    latest = history['snapshots'][symbol][-1]
+                    pnl_data.append({
+                        'Token': symbol,
+                        'P&L %': latest.get('pnl_pct', 0),
+                        'Valeur $': latest.get('value', 0)
+                    })
+            
+            if pnl_data:
+                df_pnl = pd.DataFrame(pnl_data)
+                df_pnl = df_pnl.sort_values('P&L %', ascending=True)
+                
+                # Couleurs basées sur le P&L
+                colors = ['#00FF88' if p >= 0 else '#FF4444' for p in df_pnl['P&L %']]
+                
+                fig_bar = go.Figure(data=[
+                    go.Bar(
+                        x=df_pnl['Token'],
+                        y=df_pnl['P&L %'],
+                        marker_color=colors,
+                        text=[f"{p:+.1f}%" for p in df_pnl['P&L %']],
+                        textposition='outside'
+                    )
+                ])
+                
+                fig_bar.update_layout(
+                    title="P&L par position",
+                    template="plotly_dark",
+                    height=400,
+                    xaxis_title="Token",
+                    yaxis_title="P&L %"
+                )
+                
+                st.plotly_chart(fig_bar, use_container_width=True)
+
+# ========== NAVIGATION ==========
+st.markdown("---")
+cols = st.columns(4)
+if cols[0].button("🏠 Home", use_container_width=True):
+    st.switch_page("app.py")
+if cols[1].button("👛 Wallets", use_container_width=True):
+    st.switch_page("pages/1_wallet.py")
+if cols[2].button("📈 Trades", use_container_width=True):
+    st.switch_page("pages/2_trades.py")
+if cols[3].button("🤖 Logs IA", use_container_width=True):
+    st.switch_page("pages/9_logs_ia.py")
 
 # Footer
 st.divider()
-st.caption(f"Dernière mise à jour: {history.get('last_update', 'N/A')}")
+st.caption(f"📅 Dernière mise à jour: {history.get('last_update', 'N/A')}")
