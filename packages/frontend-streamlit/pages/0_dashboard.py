@@ -338,8 +338,72 @@ if paper_wallets_data:
 # ========== WALLETS RÉELS ==========
 st.subheader("💳 Wallets Réels")
 
+# Helper to get current prices from DexScreener
+@st.cache_data(ttl=120)
+def get_token_prices(token_addresses: list) -> dict:
+    """Get current prices from DexScreener"""
+    import requests
+    prices = {}
+    try:
+        addresses = ','.join(token_addresses)
+        resp = requests.get(f"https://api.dexscreener.com/latest/dex/tokens/{addresses}", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            for pair in data.get('pairs', []):
+                symbol = pair.get('baseToken', {}).get('symbol', '')
+                if symbol and symbol not in prices:
+                    prices[symbol] = float(pair.get('priceUsd', 0))
+    except:
+        pass
+    return prices
+
+# Helper to get on-chain cash balance
+@st.cache_data(ttl=60)
+def get_onchain_cash(address: str) -> float:
+    """Get ETH + USDC balance in USD"""
+    import requests
+    try:
+        from web3 import Web3
+        w3 = Web3(Web3.HTTPProvider('https://mainnet.base.org', request_kwargs={'timeout': 5}))
+        addr = Web3.to_checksum_address(address)
+        
+        # ETH balance
+        eth_bal = float(w3.from_wei(w3.eth.get_balance(addr), 'ether'))
+        eth_price = 2500  # Fallback
+        try:
+            r = requests.get('https://api.dexscreener.com/latest/dex/tokens/0x4200000000000000000000000000000000000006', timeout=5)
+            if r.status_code == 200:
+                eth_price = float(r.json().get('pairs', [{}])[0].get('priceUsd', 2500))
+        except:
+            pass
+        eth_usd = eth_bal * eth_price
+        
+        # USDC balance
+        usdc_abi = [{'inputs':[{'name':'','type':'address'}],'name':'balanceOf','outputs':[{'name':'','type':'uint256'}],'stateMutability':'view','type':'function'}]
+        usdc = w3.eth.contract(address=Web3.to_checksum_address('0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'), abi=usdc_abi)
+        usdc_bal = usdc.functions.balanceOf(addr).call() / 1e6
+        
+        return eth_usd + usdc_bal
+    except:
+        return 0
+
 if real_wallets_data:
     for rw in real_wallets_data:
+        # Get real prices for positions
+        token_addresses = [p.get('token_address', '') for p in rw['positions'].values() if p.get('token_address')]
+        current_prices = get_token_prices(token_addresses) if token_addresses else {}
+        
+        # Calculate real positions value
+        positions_value = 0
+        for sym, pos in rw['positions'].items():
+            amount = pos.get('amount', 0)
+            price = current_prices.get(sym, pos.get('avg_price', 0))
+            positions_value += amount * price
+        
+        # Get on-chain cash
+        onchain_cash = get_onchain_cash(rw['address']) if rw['address'] else 0
+        total_value = onchain_cash + positions_value
+        
         with st.container():
             col_info, col_cash, col_positions, col_value = st.columns([3, 2, 2, 2])
             
@@ -349,18 +413,23 @@ if real_wallets_data:
                 st.caption(f"{chain_icon} {rw['chain'].upper()} | `{rw['address'][:10]}...{rw['address'][-6:]}`")
             
             with col_cash:
-                st.metric("💵 Balance", f"${rw['cash']:,.2f}")
+                st.metric("💵 Cash", f"${onchain_cash:,.2f}")
             
             with col_positions:
                 st.metric("📊 Positions", f"{rw['positions_count']}/{rw['max_positions']}")
             
             with col_value:
-                st.metric("💰 Total", f"${rw['total_value']:,.2f}")
+                st.metric("💰 Total", f"${total_value:,.2f}")
             
-            # Show positions tokens if any
+            # Show ALL positions tokens
             if rw['positions']:
-                tokens_str = ", ".join([f"{sym}: {p.get('amount', 0):.2f}" for sym, p in list(rw['positions'].items())[:3]])
-                st.caption(f"🪙 {tokens_str}")
+                tokens_list = []
+                for sym, p in rw['positions'].items():
+                    amt = p.get('amount', 0)
+                    price = current_prices.get(sym, 0)
+                    val = amt * price if price else 0
+                    tokens_list.append(f"{sym}: {amt:.2f}" + (f" (${val:.2f})" if val > 0 else ""))
+                st.caption(f"🪙 {', '.join(tokens_list)}")
         
         st.markdown("---")
 else:
