@@ -449,6 +449,100 @@ def main():
         'candidates': candidates,
     }
     
+    # AUTO-EXECUTE: If there are BUY recommendations and slots available, execute trades
+    auto_execute = os.environ.get('AUTO_EXECUTE', 'true').lower() == 'true'
+    slots_available = total_slots - total_positions
+    
+    if auto_execute and slots_available > 0:
+        buy_candidates = [c for c in candidates if c.get('recommendation') == 'BUY']
+        
+        if buy_candidates:
+            print(f"\n🤖 AUTO-EXECUTE: {len(buy_candidates)} BUY signal(s), {slots_available} slot(s) available", file=sys.stderr)
+            
+            # Get wallet config for position sizing
+            wallet_cfg = wallets[0] if wallets else {}
+            position_size_pct = 5  # Default 5%
+            
+            # Load wallet config for position sizing
+            try:
+                with open(WALLETS_CONFIG) as f:
+                    wc = json.load(f)
+                    for w in wc.get('wallets', []):
+                        if w.get('enabled'):
+                            position_size_pct = w.get('position_size_pct', 5)
+                            break
+            except:
+                pass
+            
+            # Calculate position size
+            total_cash = sum(w.get('cash', 0) for w in wallets_analysis)
+            position_usd = min(total_cash * position_size_pct / 100, total_cash * 0.3)  # Max 30% per trade
+            position_usd = max(5, min(position_usd, 50))  # Between $5 and $50
+            
+            # Build trade decisions
+            decisions = []
+            for c in buy_candidates[:slots_available]:  # Limit to available slots
+                symbol = c.get('symbol', '')
+                dex_pair = c.get('dex_pair', {})
+                token_address = dex_pair.get('baseToken', {}).get('address', '')
+                
+                if not token_address:
+                    print(f"  ⚠️ Skip {symbol}: no token address", file=sys.stderr)
+                    continue
+                
+                # Calculate SL/TP based on current price
+                price = c.get('cmc_data', {}).get('price', 0) or c.get('technical', {}).get('price', 0)
+                if price > 0:
+                    stop_loss = price * 0.85  # -15%
+                    tp1 = price * 1.25  # +25%
+                    tp2 = price * 1.50  # +50%
+                else:
+                    stop_loss = None
+                    tp1 = None
+                    tp2 = None
+                
+                decisions.append({
+                    'action': 'BUY',
+                    'symbol': symbol,
+                    'token_address': token_address,
+                    'amount_usd': round(position_usd, 2),
+                    'stop_loss': stop_loss,
+                    'tp1': tp1,
+                    'tp2': tp2,
+                    'score': c.get('score', 0),
+                    'reasons': c.get('reasons', []),
+                })
+                print(f"  🎯 {symbol}: ${position_usd:.2f} (score {c.get('score', 0)})", file=sys.stderr)
+            
+            # Execute trades via execute_trades.py
+            if decisions:
+                print(f"\n📤 Executing {len(decisions)} trade(s)...", file=sys.stderr)
+                try:
+                    import subprocess
+                    wallet_id = wallets[0]['id'] if wallets else 'simulation'
+                    
+                    result = subprocess.run(
+                        ['python', 'scripts/execute_trades.py', '--wallet', wallet_id],
+                        input=json.dumps(decisions),
+                        capture_output=True,
+                        text=True,
+                        cwd=os.path.dirname(os.path.dirname(__file__)),
+                        timeout=120
+                    )
+                    
+                    if result.returncode == 0:
+                        print(f"✅ Trades executed successfully", file=sys.stderr)
+                        print(result.stdout, file=sys.stderr)
+                    else:
+                        print(f"❌ Trade execution failed: {result.stderr}", file=sys.stderr)
+                        
+                except Exception as e:
+                    print(f"❌ Error executing trades: {e}", file=sys.stderr)
+            
+            output['auto_executed'] = decisions
+        else:
+            print(f"\n📊 No BUY signals (all candidates HOLD or below threshold)", file=sys.stderr)
+    
     print(json.dumps(output, indent=2, default=str))
 
 if __name__ == '__main__':
