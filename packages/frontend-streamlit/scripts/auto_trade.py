@@ -508,10 +508,15 @@ def run_bot():
         portfolio = calculate_portfolio_value(sim, tokens)
         
         # === BUY LOGIC ===
+        max_positions = config.get('max_positions', 10)  # Default 10 if not set
+        current_positions = len(sim.get('positions', {}))
+        
         if portfolio['cash'] < MIN_TRADE_USDC:
             log(f"Low cash (${portfolio['cash']:.2f}), skipping buys", "INFO")
         elif portfolio['exposure_pct'] >= MAX_TOTAL_EXPOSURE_PCT:
             log(f"Max exposure reached ({portfolio['exposure_pct']:.1f}%), skipping buys", "INFO")
+        elif current_positions >= max_positions:
+            log(f"🚫 Max positions reached ({current_positions}/{max_positions}), skipping buys", "INFO")
         else:
             # Tokens already fetched above
             if not tokens:
@@ -551,6 +556,10 @@ Cash disponible: ${portfolio['cash']:.2f} | Exposure: {portfolio['exposure_pct']
                 else:
                     positions_section = "\n## 📊 POSITIONS OUVERTES: Aucune\n"
                 
+                # Calculate remaining slots
+                slots_remaining = max_positions - current_positions
+                slots_info = f"⚠️ SLOTS RESTANTS: {slots_remaining}/{max_positions} (max {slots_remaining} nouveaux BUY possibles)" if slots_remaining < max_positions else ""
+                
                 prompt = f"""Tu es un trader crypto expert quantitatif. Analyse en profondeur et raisonne étape par étape.
 
 ## CONTEXTE MARCHÉ
@@ -558,6 +567,7 @@ Cash disponible: ${portfolio['cash']:.2f} | Exposure: {portfolio['exposure_pct']
 - Chain focus: {chain}
 - Profil: {profile_key.upper()} (min score: {profile.min_score})
 {positions_section}
+{slots_info}
 
 ## TOKENS À ANALYSER ({len(sorted_tokens)} total, top 30 par momentum)
 {token_list}
@@ -698,6 +708,13 @@ Si aucune action nécessaire après analyse: `[]`
             'last_run': datetime.now().isoformat(),
             'last_result': {'executed': executed}
         })
+        
+        # Track position prices for charts
+        try:
+            from scripts.track_positions import track_positions
+            track_positions()
+        except Exception as e:
+            log(f"Position tracking failed: {e}", "WARN")
         
         log(f"✅ Done. Executed: {executed or 'none'}")
         return {'status': 'ok', 'executed': executed}
