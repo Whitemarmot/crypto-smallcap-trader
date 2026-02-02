@@ -53,27 +53,14 @@ with st.sidebar:
     st.title("SmallCap Trader")
     st.markdown("---")
     
-    # Status du bot
-    bot_status = st.toggle("🤖 Bot Trading", value=False)
-    if bot_status:
-        st.success("✅ Bot actif")
-    else:
-        st.info("⏸️ Bot en pause")
+    # Quick links
+    st.page_link("pages/1_wallet.py", label="👛 Wallets", icon="👛")
+    st.page_link("pages/9_positions.py", label="📊 Positions", icon="📊")
+    st.page_link("pages/2_trades.py", label="📈 Trades", icon="📈")
+    st.page_link("pages/9_logs_ia.py", label="🤖 Logs IA", icon="🤖")
     
     st.markdown("---")
-    
-    # Paramètres rapides
-    st.subheader("⚙️ Paramètres")
-    risk_level = st.select_slider(
-        "Niveau de risque",
-        options=["Très faible", "Faible", "Modéré", "Élevé", "Agressif"],
-        value="Modéré"
-    )
-    
-    max_position = st.slider("Taille max position ($)", 100, 5000, 500, 100)
-    
-    st.markdown("---")
-    st.caption("v0.1.0 | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
+    st.caption("v0.2.0 | " + datetime.now().strftime("%d/%m/%Y %H:%M"))
 
 # Header principal
 st.markdown('<p class="main-header">🚀 Crypto SmallCap Trader</p>', unsafe_allow_html=True)
@@ -180,33 +167,16 @@ with nav_cols[0]:
         st.switch_page("pages/1_wallet.py")
 
 with nav_cols[1]:
+    if st.button("📊 Positions", use_container_width=True):
+        st.switch_page("pages/9_positions.py")
+
+with nav_cols[2]:
     if st.button("📈 Trades", use_container_width=True):
         st.switch_page("pages/2_trades.py")
 
-with nav_cols[2]:
-    if st.button("📡 Signaux", use_container_width=True):
-        st.switch_page("pages/3_signals.py")
-
 with nav_cols[3]:
-    if st.button("🎯 Stratégies", use_container_width=True):
-        st.switch_page("pages/4_strategies.py")
-
-nav_cols2 = st.columns(4)
-
-with nav_cols2[0]:
-    if st.button("🐋 Whales", use_container_width=True, type="secondary"):
-        st.switch_page("pages/7_whales.py")
-
-with nav_cols2[1]:
-    if st.button("🤖 AI", use_container_width=True):
-        st.switch_page("pages/6_ai_analysis.py")
-
-with nav_cols2[2]:
-    if st.button("⚙️ Params", use_container_width=True):
-        st.switch_page("pages/5_settings.py")
-
-with nav_cols2[3]:
-    pass  # Empty for balance
+    if st.button("🤖 Logs IA", use_container_width=True):
+        st.switch_page("pages/9_logs_ia.py")
 
 # Footer
 st.markdown("---")
