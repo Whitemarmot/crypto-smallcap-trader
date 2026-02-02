@@ -217,7 +217,14 @@ def main():
         news_sentiment.append(sent.get('compound', 0))
     avg_news_sentiment = sum(news_sentiment) / len(news_sentiment) if news_sentiment else 0
     
-    # Get tokens based on config
+    # Get the main chain from wallets (use first enabled wallet's chain)
+    main_chain = 'base'
+    for w in wallets:
+        if w.get('chain'):
+            main_chain = w['chain']
+            break
+    
+    # Get tokens based on wallet's mcap preference
     mcap = config.get('mcap', 'small')
     mcap_ranges = {
         'micro': (0, 1_000_000),
@@ -227,38 +234,56 @@ def main():
     }
     min_mcap, max_mcap = mcap_ranges.get(mcap, (1_000_000, 100_000_000))
     
-    print(f"📊 Fetching tokens (mcap: {mcap})...", file=sys.stderr)
-    tokens = get_tokens_by_market_cap_cmc(min_mcap, max_mcap, limit=100)
-    sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
+    # NEW: Get tokens DIRECTLY from chain DEXes (not CMC)
+    print(f"🔗 Fetching tokens directly from {main_chain} DEXes...", file=sys.stderr)
+    try:
+        from utils.chain_tokens import get_top_gainers_on_chain
+        chain_tokens = get_top_gainers_on_chain(
+            chain=main_chain,
+            min_liquidity=30000,  # $30k min liquidity
+            min_change=-5.0,  # Include slightly negative too
+            limit=30
+        )
+        print(f"✅ Found {len(chain_tokens)} tokens on {main_chain}", file=sys.stderr)
+        
+        # Convert to standard format
+        tradable_tokens = []
+        for t in chain_tokens:
+            # Skip stablecoins and wrapped tokens
+            symbol = t.get('symbol', '').upper()
+            if symbol in ['USDC', 'USDT', 'DAI', 'WETH', 'CBETH']:
+                continue
+            # Skip if MCap out of range
+            mcap_val = t.get('market_cap', 0)
+            if mcap_val < min_mcap or mcap_val > max_mcap:
+                continue
+            
+            tradable_tokens.append({
+                'symbol': symbol,
+                'name': t.get('name', ''),
+                'price': t.get('price', 0),
+                'price_change_24h': t.get('price_change_24h', 0),
+                'market_cap': mcap_val,
+                'pair': {
+                    'baseToken': {'address': t.get('address'), 'symbol': symbol},
+                    'pairAddress': t.get('pair_address'),
+                    'liquidity': {'usd': t.get('liquidity', 0)},
+                },
+                'dex': t.get('dex'),
+                'chain': main_chain,
+            })
+        
+        for t in tradable_tokens[:10]:
+            print(f"  📈 {t['symbol']}: {t['price_change_24h']:+.1f}% | ${t['market_cap']/1e6:.1f}M mcap | {t['dex']}", file=sys.stderr)
+            
+    except Exception as e:
+        print(f"⚠️ Chain token fetch failed: {e}, falling back to CMC", file=sys.stderr)
+        # Fallback to CMC method
+        tokens = get_tokens_by_market_cap_cmc(min_mcap, max_mcap, limit=100)
+        sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
+        tradable_tokens = filter_tradable_tokens(sorted_tokens[:30], main_chain, max_tokens=15)
     
-    # Get the main chain from wallets (use first enabled wallet's chain)
-    main_chain = 'base'
-    for w in wallets:
-        if w.get('chain'):
-            main_chain = w['chain']
-            break
-    
-    # Filter tokens by tradable pairs on the chain
-    print(f"🔗 Filtering tokens tradable on {main_chain}...", file=sys.stderr)
-    tradable_tokens = filter_tradable_tokens(sorted_tokens[:30], main_chain, max_tokens=30)
-    print(f"✅ Found {len(tradable_tokens)} tradable tokens on {main_chain}", file=sys.stderr)
-    
-    # Filter by KyberSwap tradability (only tokens we can actually swap)
-    print(f"🔄 Filtering tokens tradable via KyberSwap...", file=sys.stderr)
-    from utils.kyber_filter import check_kyber_tradable
-    kyber_tradable = []
-    for t in tradable_tokens[:15]:  # Check top 15
-        pair = t.get('pair', {})
-        token_addr = pair.get('baseToken', {}).get('address') if pair else None
-        if token_addr and check_kyber_tradable(token_addr):
-            t['kyber_tradable'] = True
-            kyber_tradable.append(t)
-            print(f"  ✅ {t.get('symbol')}: KyberSwap OK", file=sys.stderr)
-        else:
-            print(f"  ❌ {t.get('symbol')}: not on KyberSwap", file=sys.stderr)
-    
-    tradable_tokens = kyber_tradable if kyber_tradable else tradable_tokens[:5]
-    print(f"✅ {len(tradable_tokens)} tokens tradable via KyberSwap", file=sys.stderr)
+    print(f"✅ {len(tradable_tokens)} tradable tokens ready for analysis", file=sys.stderr)
     
     # Analyze top candidates (only tradable ones)
     print("🔍 Analyzing top 5 tradable candidates...", file=sys.stderr)
