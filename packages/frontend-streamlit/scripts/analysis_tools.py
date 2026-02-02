@@ -10,6 +10,30 @@ import sys
 from datetime import datetime, timedelta
 
 # Technical Analysis
+def get_price_fallback(symbol: str) -> float:
+    """Get price from CMC when yfinance fails"""
+    try:
+        import requests
+        cmc_key = os.getenv('CMC_API_KEY', '849ddcc694a049708d0b5392486d6eaa')
+        resp = requests.get(
+            'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest',
+            headers={'X-CMC_PRO_API_KEY': cmc_key},
+            params={'symbol': symbol.upper(), 'convert': 'USD'},
+            timeout=10
+        )
+        data = resp.json()
+        if 'data' in data and symbol.upper() in data['data']:
+            quote = data['data'][symbol.upper()]['quote']['USD']
+            return {
+                'price': quote.get('price', 0),
+                'change_24h': quote.get('percent_change_24h', 0),
+                'volume_24h': quote.get('volume_24h', 0),
+            }
+    except:
+        pass
+    return None
+
+
 def get_technical_indicators(symbol: str, days: int = 30) -> dict:
     """Get technical indicators for a symbol using yfinance + ta"""
     try:
@@ -30,6 +54,21 @@ def get_technical_indicators(symbol: str, days: int = 30) -> dict:
             df.columns = df.columns.get_level_values(0)
         
         if df.empty or len(df) < 14:
+            # Fallback to CMC for price only
+            cmc_data = get_price_fallback(symbol)
+            if cmc_data:
+                return {
+                    'symbol': symbol,
+                    'price': cmc_data['price'],
+                    'change_24h': cmc_data['change_24h'],
+                    'source': 'CMC',
+                    'note': 'Technical indicators unavailable (no yfinance data)',
+                    'rsi': None,
+                    'rsi_signal': 'UNKNOWN',
+                    'macd_signal': 'UNKNOWN',
+                    'trend': 'UNKNOWN',
+                    'summary': f"Price only (CMC): ${cmc_data['price']:.6f} ({cmc_data['change_24h']:+.1f}%)"
+                }
             return {'symbol': symbol, 'error': 'Insufficient data'}
         
         # Calculate indicators
