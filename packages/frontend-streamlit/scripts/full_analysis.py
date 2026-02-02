@@ -19,6 +19,7 @@ from analysis_tools import (
     get_exchange_data
 )
 from utils.social_signals import get_fear_greed_index, get_tokens_by_market_cap_cmc
+from utils.dex_pairs import filter_tradable_tokens, get_best_pair
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
@@ -119,6 +120,7 @@ def load_wallets():
             'id': wallet_id,
             'name': w.get('name', wallet_id),
             'type': w.get('type', 'paper'),
+            'chain': w.get('chain', 'base'),
             'max_positions': w.get('max_positions', 10),
             'data': wallet_data,
             'path': wallet_path,
@@ -225,10 +227,22 @@ def main():
     tokens = get_tokens_by_market_cap_cmc(min_mcap, max_mcap, limit=100)
     sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
     
-    # Analyze top candidates
-    print("🔍 Analyzing top 5 candidates...", file=sys.stderr)
+    # Get the main chain from wallets (use first enabled wallet's chain)
+    main_chain = 'base'
+    for w in wallets:
+        if w.get('chain'):
+            main_chain = w['chain']
+            break
+    
+    # Filter tokens by tradable pairs on the chain
+    print(f"🔗 Filtering tokens tradable on {main_chain}...", file=sys.stderr)
+    tradable_tokens = filter_tradable_tokens(sorted_tokens[:30], main_chain, max_tokens=30)
+    print(f"✅ Found {len(tradable_tokens)} tradable tokens on {main_chain}", file=sys.stderr)
+    
+    # Analyze top candidates (only tradable ones)
+    print("🔍 Analyzing top 5 tradable candidates...", file=sys.stderr)
     candidates = []
-    for t in sorted_tokens[:5]:
+    for t in tradable_tokens[:5]:
         symbol = t.get('symbol', '')
         name = t.get('name', '')
         
@@ -238,6 +252,9 @@ def main():
             'change_24h': t.get('price_change_24h'),
             'mcap': t.get('market_cap'),
         }
+        # Add DEX pair info
+        if t.get('pair'):
+            analysis['dex_pair'] = t['pair']
         candidates.append(analysis)
     
     # Analyze each wallet
@@ -309,7 +326,9 @@ def main():
         'news': news[:5],
         'config': {
             'mcap': mcap,
+            'chain': main_chain,
             'profile': config.get('profile', 'moderate'),
+            'tradable_count': len(tradable_tokens),
         },
         'summary': {
             'total_wallets': len(wallets),
