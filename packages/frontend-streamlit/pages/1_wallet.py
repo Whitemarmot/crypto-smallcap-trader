@@ -205,31 +205,21 @@ if wallets:
         
         # Get address for real wallets
         wallet_address = wallet.get('address', '')
-        address_html = ""
-        if wallet_address:
-            short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
-            address_html = f'<div style="font-size: 0.75em; color: #aaa; font-family: monospace; margin-top: 5px;">🔑 {short_addr}</div>'
         
-        # Wallet card
-        st.markdown(f"""
-        <div class="{style_class}">
-            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
-                <div class="wallet-header">
-                    {'🟢' if wallet.get('enabled') else '⚪'} {wallet['name']}
-                    <span style="font-size: 0.65em; background: {type_color}; color: #000; padding: 3px 10px; border-radius: 12px; margin-left: 10px; font-weight: bold;">{type_badge}</span>
-                    {address_html}
-                </div>
-                <div style="text-align: right;">
-                    <div style="font-size: 1.6em; font-weight: bold; color: #fff;">${total_value:,.2f}</div>
-                    <div style="font-size: 0.85em; color: #ccc;">{len(positions)} positions | ${cash:,.2f} cash</div>
-                </div>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Wallet card - using Streamlit native components for reliability
+        status_icon = '🟢' if wallet.get('enabled') else '⚪'
         
-        # Show full address for real wallets
-        if wallet_address:
-            st.code(wallet_address, language=None)
+        col_info, col_value = st.columns([2, 1])
+        
+        with col_info:
+            st.markdown(f"### {status_icon} {wallet['name']} {type_badge}")
+            if wallet_address:
+                st.code(wallet_address, language=None)
+            st.caption(f"⛓️ {wallet.get('chain', 'base').upper()} | 🎯 {wallet.get('ai_profile', 'modere')}")
+        
+        with col_value:
+            st.metric("💰 Valeur", f"${total_value:,.2f}")
+            st.caption(f"{len(positions)} positions | ${cash:,.2f} cash")
         
         # Expandable config
         with st.expander(f"⚙️ Configurer {wallet['name']}", expanded=False):
