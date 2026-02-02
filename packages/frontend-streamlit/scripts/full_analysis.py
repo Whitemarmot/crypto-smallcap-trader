@@ -296,6 +296,18 @@ def main():
                 'chain': main_chain,
             })
         
+        # Filter by KyberSwap tradability
+        from utils.kyber_filter import check_kyber_tradable
+        kyber_tradable = []
+        for t in tradable_tokens:
+            addr = t.get('pair', {}).get('baseToken', {}).get('address')
+            if addr and check_kyber_tradable(addr):
+                kyber_tradable.append(t)
+        
+        if kyber_tradable:
+            tradable_tokens = kyber_tradable
+            print(f"  ✅ {len(kyber_tradable)} tokens tradable via KyberSwap", file=sys.stderr)
+        
         for t in tradable_tokens[:10]:
             print(f"  📈 {t['symbol']}: {t['price_change_24h']:+.1f}% | ${t['market_cap']/1e6:.1f}M mcap | {t['dex']}", file=sys.stderr)
             
