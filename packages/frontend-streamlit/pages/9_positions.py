@@ -8,12 +8,14 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import json
 import os
+import requests
 from datetime import datetime
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')
 HISTORY_PATH = os.path.join(DATA_DIR, 'position_history.json')
 CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
+CMC_API_KEY = '849ddcc694a049708d0b5392486d6eaa'
 
 def load_json(path, default):
     try:
@@ -23,6 +25,107 @@ def load_json(path, default):
     except:
         pass
     return default
+
+def save_json(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2, default=str)
+
+def get_current_price(symbol):
+    """Get current price from CMC API"""
+    try:
+        resp = requests.get(
+            'https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest',
+            headers={'X-CMC_PRO_API_KEY': CMC_API_KEY},
+            params={'symbol': symbol.upper(), 'convert': 'USD'},
+            timeout=10
+        )
+        data = resp.json()
+        if 'data' in data and symbol.upper() in data['data']:
+            return data['data'][symbol.upper()]['quote']['USD']['price']
+    except Exception as e:
+        st.error(f"Erreur prix {symbol}: {e}")
+    return 0
+
+def close_position(symbol, reason="manual_close"):
+    """Close a position at current market price"""
+    sim = load_json(SIM_PATH, {})
+    
+    if symbol not in sim.get('positions', {}):
+        return False, f"Position {symbol} non trouvée"
+    
+    pos = sim['positions'][symbol]
+    qty = pos['amount']
+    avg_price = pos.get('avg_price', 0)
+    entry_date = pos.get('entry_date', '')
+    
+    # Get current price
+    price = get_current_price(symbol)
+    if price <= 0:
+        return False, f"Impossible d'obtenir le prix pour {symbol}"
+    
+    # Calculate PnL
+    entry_value = qty * avg_price
+    exit_value = qty * price
+    pnl_usd = exit_value - entry_value
+    pnl_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else 0
+    
+    # Calculate holding duration
+    holding_hours = 0
+    if entry_date:
+        try:
+            entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
+            holding_hours = round((datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600, 1)
+        except:
+            pass
+    
+    # Add cash back
+    sim['portfolio']['USDC'] = sim.get('portfolio', {}).get('USDC', 0) + exit_value
+    
+    # Record closed position
+    if 'closed_positions' not in sim:
+        sim['closed_positions'] = []
+    
+    closed_pos = {
+        'symbol': symbol,
+        'entry_date': entry_date,
+        'exit_date': datetime.now().isoformat(),
+        'holding_hours': holding_hours,
+        'qty': qty,
+        'entry_price': avg_price,
+        'exit_price': price,
+        'entry_value': round(entry_value, 2),
+        'exit_value': round(exit_value, 2),
+        'pnl_usd': round(pnl_usd, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'reason': reason,
+    }
+    sim['closed_positions'].append(closed_pos)
+    
+    # Remove position
+    del sim['positions'][symbol]
+    
+    # Add to history
+    if 'history' not in sim:
+        sim['history'] = []
+    sim['history'].append({
+        'ts': datetime.now().isoformat(),
+        'action': 'SELL',
+        'symbol': symbol,
+        'qty': qty,
+        'price': price,
+        'usd': exit_value,
+        'pnl_usd': round(pnl_usd, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'auto': False,
+        'reason': reason,
+    })
+    
+    # Save
+    save_json(SIM_PATH, sim)
+    
+    pnl_emoji = "🟢" if pnl_usd >= 0 else "🔴"
+    return True, f"{pnl_emoji} {symbol} vendu @ ${price:.6f} | P&L: ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
 
 st.set_page_config(page_title="📊 Positions", layout="wide")
 st.title("📊 Suivi des Positions")
@@ -68,6 +171,10 @@ else:
     # Position cards
     st.subheader("📈 Positions actuelles")
     
+    # Handle close confirmations
+    if 'confirm_close' not in st.session_state:
+        st.session_state.confirm_close = None
+    
     cols = st.columns(min(len(positions), 3))
     for i, (symbol, pos) in enumerate(positions.items()):
         with cols[i % 3]:
@@ -102,6 +209,29 @@ else:
                 tp1 = pos.get('tp1', 0)
                 tp2 = pos.get('tp2', 0)
                 st.caption(f"SL: ${sl:.6f} | TP1: ${tp1:.6f} | TP2: ${tp2:.6f}")
+            
+            # Close button
+            if st.session_state.confirm_close == symbol:
+                # Confirmation mode
+                st.warning(f"⚠️ Fermer {symbol} au prix marché ?")
+                col_yes, col_no = st.columns(2)
+                with col_yes:
+                    if st.button("✅ Oui", key=f"yes_{symbol}"):
+                        success, msg = close_position(symbol, reason="manual_close")
+                        if success:
+                            st.success(msg)
+                            st.session_state.confirm_close = None
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                with col_no:
+                    if st.button("❌ Non", key=f"no_{symbol}"):
+                        st.session_state.confirm_close = None
+                        st.rerun()
+            else:
+                if st.button(f"🔻 Fermer", key=f"close_{symbol}"):
+                    st.session_state.confirm_close = symbol
+                    st.rerun()
     
     st.divider()
     
