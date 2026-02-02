@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-🤖 Auto-Trading Bot Script
-Lit la config, analyse, trade automatiquement
-Appelé par cron ou manuellement
+🤖 Auto-Trading Bot Script v2
+Amélioré avec les suggestions de Kempfr (Dev Lead)
+- Lock file, rate limiting, SELL logic, max trades, atomic writes
 """
 
 import json
 import os
 import sys
-from datetime import datetime
+import time
+import tempfile
+import shutil
+import fcntl
+from datetime import datetime, timedelta
 
-# Add parent to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from utils.social_signals import get_fear_greed_index, get_tokens_by_market_cap
@@ -22,111 +25,289 @@ DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 SIM_DB_PATH = os.path.join(DATA_DIR, 'simulation.json')
 BOT_CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
 LOG_PATH = os.path.join(DATA_DIR, 'bot_log.json')
+LOCK_PATH = os.path.join(DATA_DIR, 'bot.lock')
+STATE_PATH = os.path.join(DATA_DIR, 'bot_state.json')
+
+# Config
+COOLDOWN_SECONDS = 300  # 5 min minimum entre runs
+MAX_DAILY_TRADES = 10
+TAKE_PROFIT_PCT = 20  # +20% = vendre
+STOP_LOSS_PCT = -15   # -15% = vendre
 
 MCAP_PRESETS = {
     'micro': {'min': 0, 'max': 1_000_000},
     'small': {'min': 1_000_000, 'max': 100_000_000},
     'mid': {'min': 100_000_000, 'max': 1_000_000_000},
-    'large': {'min': 1_000_000_000, 'max': 0},
+    'large': {'min': 1_000_000_000, 'max': float('inf')},  # Fixed!
 }
 
 
 def load_json(path, default):
-    if os.path.exists(path):
-        with open(path, 'r') as f:
-            return json.load(f)
+    try:
+        if os.path.exists(path):
+            with open(path, 'r') as f:
+                return json.load(f)
+    except:
+        pass
     return default
 
 
-def save_json(path, data):
+def save_json_atomic(path, data):
+    """Atomic write to avoid corruption"""
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'w') as f:
-        json.dump(data, f, indent=2, default=str)
+    with tempfile.NamedTemporaryFile('w', dir=os.path.dirname(path), delete=False) as tmp:
+        json.dump(data, tmp, indent=2, default=str)
+        tmp_path = tmp.name
+    shutil.move(tmp_path, path)
 
 
-def log(msg, level="INFO"):
+def log(msg, level="INFO", context=None):
+    """Structured logging"""
     ts = datetime.now().isoformat()
+    entry = {
+        'ts': ts,
+        'level': level,
+        'msg': msg,
+        'context': context or {}
+    }
     print(f"[{ts}] [{level}] {msg}")
     
-    # Append to log file
     logs = load_json(LOG_PATH, [])
-    logs.append({'ts': ts, 'level': level, 'msg': msg})
-    logs = logs[-100:]  # Keep last 100
-    save_json(LOG_PATH, logs)
+    logs.append(entry)
+    logs = logs[-200:]  # Keep last 200
+    save_json_atomic(LOG_PATH, logs)
+
+
+def acquire_lock():
+    """Prevent concurrent execution"""
+    try:
+        lock_file = open(LOCK_PATH, 'w')
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        return lock_file
+    except (IOError, OSError):
+        return None
+
+
+def release_lock(lock_file):
+    """Release lock"""
+    if lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        lock_file.close()
+        try:
+            os.remove(LOCK_PATH)
+        except:
+            pass
+
+
+def check_cooldown():
+    """Check if enough time passed since last run"""
+    state = load_json(STATE_PATH, {})
+    last_run = state.get('last_run')
+    if last_run:
+        last_dt = datetime.fromisoformat(last_run)
+        elapsed = (datetime.now() - last_dt).total_seconds()
+        if elapsed < COOLDOWN_SECONDS:
+            return False, COOLDOWN_SECONDS - elapsed
+    return True, 0
+
+
+def get_daily_trade_count():
+    """Count trades today"""
+    sim = load_json(SIM_DB_PATH, {})
+    today = datetime.now().date().isoformat()
+    count = 0
+    for h in sim.get('history', []):
+        if h.get('ts', '').startswith(today):
+            count += 1
+    return count
 
 
 def get_price(symbol: str) -> float:
+    """Get current price from CoinGecko"""
     import requests
     try:
-        maps = {'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana', 'PEPE': 'pepe', 'DOGE': 'dogecoin'}
+        maps = {
+            'BTC': 'bitcoin', 'ETH': 'ethereum', 'SOL': 'solana',
+            'PEPE': 'pepe', 'DOGE': 'dogecoin', 'XRP': 'ripple',
+            'ADA': 'cardano', 'AVAX': 'avalanche-2', 'LINK': 'chainlink'
+        }
         cg_id = maps.get(symbol.upper(), symbol.lower())
-        r = requests.get(f'https://api.coingecko.com/api/v3/simple/price', params={'ids': cg_id, 'vs_currencies': 'usd'}, timeout=10)
+        r = requests.get(
+            'https://api.coingecko.com/api/v3/simple/price',
+            params={'ids': cg_id, 'vs_currencies': 'usd'},
+            timeout=10
+        )
         return r.json().get(cg_id, {}).get('usd', 0)
-    except:
+    except Exception as e:
+        log(f"Price fetch error: {e}", "WARN")
         return 0
 
 
-def trade(sim, action, symbol, amount_usd, price):
+def check_positions_for_sell(sim, fg_val):
+    """Check existing positions for take profit or stop loss"""
+    sells = []
+    for symbol, pos in list(sim.get('positions', {}).items()):
+        current_price = get_price(symbol)
+        if current_price <= 0:
+            continue
+        
+        avg_price = pos.get('avg_price', 0)
+        if avg_price <= 0:
+            continue
+        
+        pnl_pct = ((current_price / avg_price) - 1) * 100
+        
+        # Take profit
+        if pnl_pct >= TAKE_PROFIT_PCT:
+            sells.append({
+                'symbol': symbol,
+                'reason': f'take_profit ({pnl_pct:.1f}%)',
+                'price': current_price,
+                'pnl_pct': pnl_pct
+            })
+        # Stop loss
+        elif pnl_pct <= STOP_LOSS_PCT:
+            sells.append({
+                'symbol': symbol,
+                'reason': f'stop_loss ({pnl_pct:.1f}%)',
+                'price': current_price,
+                'pnl_pct': pnl_pct
+            })
+        # Extreme fear + loss = cut
+        elif fg_val < 20 and pnl_pct < -5:
+            sells.append({
+                'symbol': symbol,
+                'reason': f'extreme_fear_exit ({pnl_pct:.1f}%)',
+                'price': current_price,
+                'pnl_pct': pnl_pct
+            })
+    
+    return sells
+
+
+def execute_buy(sim, symbol, amount_usd, price):
+    """Execute a BUY trade"""
     ts = datetime.now().isoformat()
-    if action == 'BUY' and sim['portfolio'].get('USD', 0) >= amount_usd and price > 0:
-        sim['portfolio']['USD'] -= amount_usd
-        qty = amount_usd / price
-        if symbol in sim['positions']:
-            p = sim['positions'][symbol]
-            total = p['amount'] + qty
-            sim['positions'][symbol] = {'amount': total, 'avg_price': ((p['amount']*p['avg_price'])+amount_usd)/total}
-        else:
-            sim['positions'][symbol] = {'amount': qty, 'avg_price': price}
-        sim['history'].append({'ts': ts, 'action': 'BUY', 'symbol': symbol, 'qty': qty, 'price': price, 'auto': True})
-        return True
-    return False
+    if sim['portfolio'].get('USD', 0) < amount_usd or price <= 0:
+        return False
+    
+    sim['portfolio']['USD'] -= amount_usd
+    qty = amount_usd / price
+    
+    if symbol in sim['positions']:
+        p = sim['positions'][symbol]
+        total = p['amount'] + qty
+        new_avg = ((p['amount'] * p['avg_price']) + amount_usd) / total
+        sim['positions'][symbol] = {'amount': total, 'avg_price': new_avg}
+    else:
+        sim['positions'][symbol] = {'amount': qty, 'avg_price': price}
+    
+    sim['history'].append({
+        'ts': ts, 'action': 'BUY', 'symbol': symbol,
+        'qty': qty, 'price': price, 'usd': amount_usd, 'auto': True
+    })
+    return True
+
+
+def execute_sell(sim, symbol, price, reason):
+    """Execute a SELL trade"""
+    ts = datetime.now().isoformat()
+    if symbol not in sim['positions'] or price <= 0:
+        return False
+    
+    pos = sim['positions'][symbol]
+    qty = pos['amount']
+    usd_value = qty * price
+    pnl = (price - pos['avg_price']) * qty
+    
+    sim['portfolio']['USD'] += usd_value
+    del sim['positions'][symbol]
+    
+    sim['history'].append({
+        'ts': ts, 'action': 'SELL', 'symbol': symbol,
+        'qty': qty, 'price': price, 'usd': usd_value,
+        'pnl': pnl, 'reason': reason, 'auto': True
+    })
+    return True
 
 
 def run_bot():
-    log("🤖 Bot starting...")
+    """Main bot execution"""
+    log("🤖 Bot v2 starting...")
     
-    # Load config
-    cfg = load_json(BOT_CONFIG_PATH, {})
+    # Acquire lock
+    lock = acquire_lock()
+    if not lock:
+        log("Another instance running, exiting", "WARN")
+        return {'status': 'locked'}
     
-    if not cfg.get('enabled'):
-        log("Bot disabled, exiting")
-        return {'status': 'disabled'}
-    
-    mcap_key = cfg.get('mcap', 'small')
-    chain = cfg.get('chain', 'base')
-    profile_key = cfg.get('profile', 'modere')
-    provider = cfg.get('provider', 'openclaw')
-    
-    mcap = MCAP_PRESETS.get(mcap_key, MCAP_PRESETS['small'])
-    profile = AI_PROFILES.get(profile_key, AI_PROFILES['modere'])
-    
-    log(f"Config: {mcap_key} / {chain} / {profile_key} / {provider}")
-    
-    # Load simulation
-    sim = load_json(SIM_DB_PATH, {'portfolio': {'USD': 10000}, 'positions': {}, 'history': []})
-    usd = sim['portfolio'].get('USD', 0)
-    
-    if usd < 50:
-        log("Not enough USD, skipping", "WARN")
-        return {'status': 'low_funds', 'usd': usd}
-    
-    # Get Fear & Greed
-    fg = get_fear_greed_index()
-    fg_val = fg.value if fg else 50
-    log(f"Fear & Greed: {fg_val}")
-    
-    # Get tokens
-    tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=20)
-    if not tokens:
-        log("No tokens found", "WARN")
-        return {'status': 'no_tokens'}
-    
-    log(f"Found {len(tokens)} tokens")
-    
-    # Build prompt
-    token_list = "\n".join([f"- {t['symbol']}: ${t.get('price',0):.4f} | 24h: {t.get('price_change_24h',0) or 0:+.1f}% | MCap: ${(t.get('market_cap',0) or 0)/1e6:.1f}M" for t in tokens[:15]])
-    
-    prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions.
+    try:
+        # Check cooldown
+        can_run, wait_time = check_cooldown()
+        if not can_run:
+            log(f"Cooldown active, wait {wait_time:.0f}s", "INFO")
+            return {'status': 'cooldown', 'wait': wait_time}
+        
+        # Check daily limit
+        daily_trades = get_daily_trade_count()
+        if daily_trades >= MAX_DAILY_TRADES:
+            log(f"Max daily trades reached ({daily_trades})", "INFO")
+            return {'status': 'max_trades', 'count': daily_trades}
+        
+        # Load config
+        cfg = load_json(BOT_CONFIG_PATH, {})
+        if not cfg.get('enabled'):
+            log("Bot disabled")
+            return {'status': 'disabled'}
+        
+        mcap_key = cfg.get('mcap', 'small')
+        chain = cfg.get('chain', 'base')
+        profile_key = cfg.get('profile', 'modere')
+        provider = cfg.get('provider', 'openclaw')
+        
+        mcap = MCAP_PRESETS.get(mcap_key, MCAP_PRESETS['small'])
+        profile = AI_PROFILES.get(profile_key, AI_PROFILES['modere'])
+        
+        log(f"Config: {mcap_key}/{chain}/{profile_key}/{provider}")
+        
+        # Load simulation
+        sim = load_json(SIM_DB_PATH, {'portfolio': {'USD': 10000}, 'positions': {}, 'history': []})
+        usd = sim['portfolio'].get('USD', 0)
+        
+        # Get Fear & Greed
+        fg = get_fear_greed_index()
+        fg_val = fg.value if fg else 50
+        log(f"Fear & Greed: {fg_val}")
+        
+        executed = []
+        
+        # === SELL LOGIC ===
+        sells = check_positions_for_sell(sim, fg_val)
+        for sell in sells:
+            if execute_sell(sim, sell['symbol'], sell['price'], sell['reason']):
+                log(f"🔴 SELL {sell['symbol']} - {sell['reason']}", "INFO", sell)
+                executed.append(f"SELL:{sell['symbol']}")
+        
+        # === BUY LOGIC ===
+        if usd < 50:
+            log("Low USD, skipping buys", "INFO")
+        else:
+            # Get tokens
+            tokens = get_tokens_by_market_cap(mcap['min'], mcap['max'], limit=20)
+            if not tokens:
+                log("No tokens found", "WARN")
+            else:
+                log(f"Found {len(tokens)} tokens")
+                
+                # Build prompt
+                token_list = "\n".join([
+                    f"- {t['symbol']}: ${t.get('price',0):.4f} | 24h: {t.get('price_change_24h',0) or 0:+.1f}% | MCap: ${(t.get('market_cap',0) or 0)/1e6:.1f}M"
+                    for t in tokens[:15]
+                ])
+                
+                prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions.
 
 MARCHÉ: Fear & Greed = {fg_val}/100
 CHAIN: {chain}
@@ -144,52 +325,55 @@ Réponds UNIQUEMENT avec un JSON array:
 
 Si rien d'intéressant: []
 """
-    
-    # Call AI
-    log(f"Calling {provider}...")
-    model = LLM_MODELS.get(provider, {}).get('default', 'openclaw:main')
-    response = call_llm(prompt, provider, model)
-    
-    if not response:
-        log("No AI response", "ERROR")
-        return {'status': 'ai_error'}
-    
-    # Parse response
-    import re
-    try:
-        match = re.search(r'\[.*\]', response, re.DOTALL)
-        decisions = json.loads(match.group()) if match else []
-    except:
-        log("Parse error", "ERROR")
-        return {'status': 'parse_error'}
-    
-    log(f"Got {len(decisions)} decisions")
-    
-    # Execute
-    executed = []
-    for d in decisions:
-        sym = d.get('symbol', '?')
-        act = d.get('action', 'HOLD')
-        conf = d.get('confidence', 0)
-        reason = d.get('reason', '')
+                
+                # Call AI
+                log(f"Calling {provider}...")
+                model = LLM_MODELS.get(provider, {}).get('default', 'openclaw:main')
+                response = call_llm(prompt, provider, model)
+                
+                if response:
+                    # Parse response
+                    import re
+                    try:
+                        match = re.search(r'\[.*\]', response, re.DOTALL)
+                        decisions = json.loads(match.group()) if match else []
+                    except:
+                        decisions = []
+                        log("Parse error", "ERROR")
+                    
+                    log(f"Got {len(decisions)} decisions")
+                    
+                    # Execute buys
+                    remaining_trades = MAX_DAILY_TRADES - daily_trades - len(executed)
+                    for d in decisions[:remaining_trades]:
+                        sym = d.get('symbol', '?')
+                        act = d.get('action', 'HOLD')
+                        conf = d.get('confidence', 0)
+                        reason = d.get('reason', '')
+                        
+                        if act == 'BUY' and conf >= profile.min_score:
+                            price = get_price(sym)
+                            amount = usd * (profile.trade_amount_pct / 100)
+                            if amount >= 10 and price > 0:
+                                if execute_buy(sim, sym, amount, price):
+                                    log(f"🟢 BUY {sym} @ ${price:.4f} ({conf}%): {reason}", "INFO", d)
+                                    executed.append(f"BUY:{sym}")
+                                    usd -= amount
+                else:
+                    log("No AI response", "ERROR")
         
-        if act == 'BUY' and conf >= profile.min_score:
-            price = get_price(sym)
-            amount = usd * (profile.trade_amount_pct / 100)
-            if amount >= 10 and price > 0:
-                if trade(sim, 'BUY', sym, amount, price):
-                    log(f"✅ BUY {sym} @ ${price:.4f} ({conf}%): {reason}")
-                    executed.append(sym)
-                    usd -= amount
+        # Save state
+        save_json_atomic(SIM_DB_PATH, sim)
+        save_json_atomic(STATE_PATH, {
+            'last_run': datetime.now().isoformat(),
+            'last_result': {'executed': executed}
+        })
+        
+        log(f"Done. Executed: {executed or 'none'}")
+        return {'status': 'ok', 'executed': executed}
     
-    # Save
-    if executed:
-        save_json(SIM_DB_PATH, sim)
-        log(f"Executed: {', '.join(executed)}")
-    else:
-        log("No trades executed")
-    
-    return {'status': 'ok', 'executed': executed, 'decisions': len(decisions)}
+    finally:
+        release_lock(lock)
 
 
 if __name__ == '__main__':
