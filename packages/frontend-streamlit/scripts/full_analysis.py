@@ -277,6 +277,7 @@ def main():
     if min_mcap == float('inf'):
         min_mcap, max_mcap = 1_000_000, 100_000_000
     
+    mcap = '+'.join(selected_ranges)  # e.g. "small+mid"
     print(f"📊 MCap filter: {selected_ranges} (${min_mcap/1e6:.0f}M - ${max_mcap/1e6:.0f}M)", file=sys.stderr)
     
     # NEW: Get tokens DIRECTLY from chain DEXes (not CMC)

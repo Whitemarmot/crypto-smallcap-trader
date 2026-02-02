@@ -82,17 +82,20 @@ def get_bot_status():
 def run_analysis_now():
     """Run analysis script directly"""
     try:
-        script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'full_analysis.py')
-        venv_python = os.path.join(os.path.dirname(__file__), '..', 'venv', 'bin', 'python')
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        script_path = os.path.join(base_dir, 'scripts', 'full_analysis.py')
+        venv_python = os.path.join(base_dir, 'venv', 'bin', 'python')
+        log_file = os.path.join(base_dir, 'data', 'bot_run.log')
         
-        # Run in background
-        subprocess.Popen(
-            [venv_python, script_path],
-            cwd=os.path.dirname(script_path),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
+        # Run in background with logging
+        with open(log_file, 'w') as log:
+            subprocess.Popen(
+                [venv_python, script_path],
+                cwd=base_dir,  # Run from frontend-streamlit dir for imports
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True
+            )
         return True
     except Exception as e:
         print(f"Error running analysis: {e}")
