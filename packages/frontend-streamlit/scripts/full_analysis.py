@@ -21,8 +21,12 @@ from analysis_tools import (
 from utils.social_signals import get_fear_greed_index, get_tokens_by_market_cap_cmc
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
-SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')
+WALLETS_DIR = os.path.join(DATA_DIR, 'wallets')
+WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
 CONFIG_PATH = os.path.join(DATA_DIR, 'bot_config.json')
+
+# Legacy path for backwards compatibility
+SIM_PATH = os.path.join(DATA_DIR, 'simulation.json')
 
 def load_json(path, default):
     try:
@@ -91,61 +95,54 @@ def analyze_token(symbol: str, name: str = None) -> dict:
     
     return result
 
-def main():
-    print("🔬 Starting Full Analysis...", file=sys.stderr)
+def load_wallets():
+    """Load all enabled wallets"""
+    wallets = []
     
-    # Load config
-    config = load_json(CONFIG_PATH, {})
-    sim = load_json(SIM_PATH, {'portfolio': {'USDC': 10000}, 'positions': {}})
+    # Load wallets config
+    wallets_config = load_json(WALLETS_CONFIG, {'wallets': []})
     
-    # Market Overview
-    print("📡 Getting market overview...", file=sys.stderr)
-    fg = get_fear_greed_index()
-    news = get_crypto_news_rss(limit=5)
-    
-    # Analyze news sentiment
-    news_sentiment = []
-    for article in news[:5]:
-        sent = analyze_sentiment_text(article.get('title', ''))
-        news_sentiment.append(sent.get('compound', 0))
-    avg_news_sentiment = sum(news_sentiment) / len(news_sentiment) if news_sentiment else 0
-    
-    # Get tokens based on config
-    mcap = config.get('mcap', 'small')
-    mcap_ranges = {
-        'micro': (0, 1_000_000),
-        'small': (1_000_000, 100_000_000),
-        'mid': (100_000_000, 1_000_000_000),
-        'large': (1_000_000_000, float('inf')),
-    }
-    min_mcap, max_mcap = mcap_ranges.get(mcap, (1_000_000, 100_000_000))
-    
-    print(f"📊 Fetching tokens (mcap: {mcap})...", file=sys.stderr)
-    tokens = get_tokens_by_market_cap_cmc(min_mcap, max_mcap, limit=100)
-    sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
-    
-    # Portfolio info
-    cash = sim.get('portfolio', {}).get('USDC', 0)
-    positions = sim.get('positions', {})
-    
-    # Analyze top candidates
-    print("🔍 Analyzing top 5 candidates...", file=sys.stderr)
-    candidates = []
-    for t in sorted_tokens[:5]:
-        symbol = t.get('symbol', '')
-        name = t.get('name', '')
+    for w in wallets_config.get('wallets', []):
+        if not w.get('enabled', True):
+            continue
         
-        analysis = analyze_token(symbol, name)
-        analysis['cmc_data'] = {
-            'price': t.get('price'),
-            'change_24h': t.get('price_change_24h'),
-            'mcap': t.get('market_cap'),
-        }
-        candidates.append(analysis)
+        wallet_id = w.get('id', 'unknown')
+        wallet_path = os.path.join(WALLETS_DIR, f"{wallet_id}.json")
+        
+        # Fallback to legacy path
+        if not os.path.exists(wallet_path) and wallet_id == 'simulation':
+            wallet_path = SIM_PATH
+        
+        wallet_data = load_json(wallet_path, {'portfolio': {'USDC': 10000}, 'positions': {}})
+        
+        wallets.append({
+            'id': wallet_id,
+            'name': w.get('name', wallet_id),
+            'type': w.get('type', 'paper'),
+            'max_positions': w.get('max_positions', 10),
+            'data': wallet_data,
+            'path': wallet_path,
+        })
     
-    # Analyze current positions
-    print("📋 Analyzing open positions...", file=sys.stderr)
+    # Fallback: if no wallets configured, use legacy simulation
+    if not wallets:
+        wallets.append({
+            'id': 'simulation',
+            'name': '🎮 Simulation',
+            'type': 'paper',
+            'max_positions': 10,
+            'data': load_json(SIM_PATH, {'portfolio': {'USDC': 10000}, 'positions': {}}),
+            'path': SIM_PATH,
+        })
+    
+    return wallets
+
+
+def analyze_wallet_positions(wallet, tokens):
+    """Analyze positions for a single wallet"""
+    positions = wallet['data'].get('positions', {})
     position_analysis = []
+    
     for symbol, pos in positions.items():
         entry_date = pos.get('entry_date', '')
         entry_formatted = ''
@@ -189,6 +186,98 @@ def main():
         position_analysis.append(analysis)
         time.sleep(0.3)
     
+    return position_analysis
+
+
+def main():
+    print("🔬 Starting Full Analysis...", file=sys.stderr)
+    
+    # Load config
+    config = load_json(CONFIG_PATH, {})
+    
+    # Load all wallets
+    wallets = load_wallets()
+    print(f"💼 Found {len(wallets)} wallet(s)", file=sys.stderr)
+    
+    # Market Overview
+    print("📡 Getting market overview...", file=sys.stderr)
+    fg = get_fear_greed_index()
+    news = get_crypto_news_rss(limit=5)
+    
+    # Analyze news sentiment
+    news_sentiment = []
+    for article in news[:5]:
+        sent = analyze_sentiment_text(article.get('title', ''))
+        news_sentiment.append(sent.get('compound', 0))
+    avg_news_sentiment = sum(news_sentiment) / len(news_sentiment) if news_sentiment else 0
+    
+    # Get tokens based on config
+    mcap = config.get('mcap', 'small')
+    mcap_ranges = {
+        'micro': (0, 1_000_000),
+        'small': (1_000_000, 100_000_000),
+        'mid': (100_000_000, 1_000_000_000),
+        'large': (1_000_000_000, float('inf')),
+    }
+    min_mcap, max_mcap = mcap_ranges.get(mcap, (1_000_000, 100_000_000))
+    
+    print(f"📊 Fetching tokens (mcap: {mcap})...", file=sys.stderr)
+    tokens = get_tokens_by_market_cap_cmc(min_mcap, max_mcap, limit=100)
+    sorted_tokens = sorted(tokens, key=lambda x: x.get('price_change_24h', 0) or 0, reverse=True)
+    
+    # Analyze top candidates
+    print("🔍 Analyzing top 5 candidates...", file=sys.stderr)
+    candidates = []
+    for t in sorted_tokens[:5]:
+        symbol = t.get('symbol', '')
+        name = t.get('name', '')
+        
+        analysis = analyze_token(symbol, name)
+        analysis['cmc_data'] = {
+            'price': t.get('price'),
+            'change_24h': t.get('price_change_24h'),
+            'mcap': t.get('market_cap'),
+        }
+        candidates.append(analysis)
+    
+    # Analyze each wallet
+    print("📋 Analyzing wallets...", file=sys.stderr)
+    wallets_analysis = []
+    total_positions = 0
+    total_slots = 0
+    
+    for wallet in wallets:
+        print(f"  💼 {wallet['name']}...", file=sys.stderr)
+        
+        wallet_data = wallet['data']
+        cash = wallet_data.get('portfolio', {}).get('USDC', 0)
+        positions = wallet_data.get('positions', {})
+        max_pos = wallet.get('max_positions', 10)
+        
+        # Analyze positions for this wallet
+        position_analysis = analyze_wallet_positions(wallet, tokens)
+        
+        # Calculate wallet totals
+        positions_value = sum(p.get('current_price', p.get('avg_price', 0)) * p.get('amount', 0) 
+                            for p in position_analysis if p.get('current_price') or p.get('avg_price'))
+        
+        wallet_info = {
+            'id': wallet['id'],
+            'name': wallet['name'],
+            'type': wallet['type'],
+            'cash': round(cash, 2),
+            'positions_value': round(positions_value, 2),
+            'total_value': round(cash + positions_value, 2),
+            'positions_count': len(positions),
+            'max_positions': max_pos,
+            'slots_available': max_pos - len(positions),
+            'positions': position_analysis,
+        }
+        
+        wallets_analysis.append(wallet_info)
+        total_positions += len(positions)
+        total_slots += max_pos
+    
     # Output
     output = {
         'timestamp': datetime.now().isoformat(),
@@ -201,16 +290,15 @@ def main():
         'news': news[:5],
         'config': {
             'mcap': mcap,
-            'max_positions': config.get('max_positions', 10),
             'profile': config.get('profile', 'moderate'),
         },
-        'portfolio': {
-            'cash': round(cash, 2),
-            'positions_count': len(positions),
-            'max_positions': config.get('max_positions', 10),
-            'slots_available': config.get('max_positions', 10) - len(positions),
+        'summary': {
+            'total_wallets': len(wallets),
+            'total_positions': total_positions,
+            'total_slots': total_slots,
+            'slots_available': total_slots - total_positions,
         },
-        'positions': position_analysis,
+        'wallets': wallets_analysis,
         'candidates': candidates,
     }
     
