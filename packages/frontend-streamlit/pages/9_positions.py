@@ -21,8 +21,6 @@ CMC_API_KEY = '849ddcc694a049708d0b5392486d6eaa'
 
 # Debug paths on load
 import sys
-print(f"[DEBUG] DATA_DIR: {DATA_DIR}", file=sys.stderr)
-print(f"[DEBUG] WALLETS_CONFIG exists: {os.path.exists(WALLETS_CONFIG)}", file=sys.stderr)
 
 def load_json(path, default):
     try:
@@ -237,7 +235,7 @@ if config_changed:
 
 if not positions:
     st.info("🔹 Aucune position ouverte. Le bot va en créer lors de sa prochaine exécution.")
-    
+else:
     # Position cards
     st.subheader("📈 Positions actuelles")
     
