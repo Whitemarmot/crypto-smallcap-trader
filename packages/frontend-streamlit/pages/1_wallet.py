@@ -15,7 +15,7 @@ import os
 # Add utils to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.database import get_db, WalletRecord
-from utils.config import load_config, save_config, SUPPORTED_NETWORKS
+from utils.config import load_config, save_config, SUPPORTED_NETWORKS, AI_PROFILES
 
 try:
     from eth_account import Account
@@ -130,11 +130,18 @@ with col_list:
     
     wallets = db.get_wallets()
     
+    # Load config for AI profiles
+    config = load_config()
+    
     if wallets:
         for wallet in wallets:
             network_info = SUPPORTED_NETWORKS.get(wallet.network, {})
             network_icon = network_info.get('icon', '🔗')
             network_name = network_info.get('name', wallet.network)
+            
+            # Get wallet's AI profile from config
+            wallet_config = config.trading.wallets.get(wallet.address, {})
+            current_ai_profile = wallet_config.get('ai_profile', 'modere')
             
             # Fetch real native balance
             try:
@@ -147,24 +154,51 @@ with col_list:
                 w_usd = 0
             
             with st.container():
-                col_w1, col_w2, col_w3, col_w4 = st.columns([3, 2, 2, 1])
+                col_w1, col_w2, col_w3, col_w4, col_w5 = st.columns([2.5, 2, 2, 2, 1])
                 
                 with col_w1:
                     status = "🟢" if wallet.is_active else "⚪"
                     st.markdown(f"**{status} {wallet.name}**")
-                    st.caption(f"`{wallet.address[:12]}...{wallet.address[-8:]}`")
+                    st.caption(f"`{wallet.address[:10]}...{wallet.address[-6:]}`")
                 
                 with col_w2:
                     st.markdown(f"{network_icon} **{wallet.network.upper()}**")
                     if w_native:
-                        st.caption(f"{w_native.balance:.6f} {w_native.symbol} (${w_usd:,.2f})")
+                        st.caption(f"{w_native.balance:.4f} {w_native.symbol} (${w_usd:,.2f})")
                     else:
                         st.caption("Balance: N/A")
                 
                 with col_w3:
-                    st.caption(f"Créé: {wallet.created_at.strftime('%d/%m/%y')}")
+                    # AI Profile selector
+                    profile_options = list(AI_PROFILES.keys())
+                    profile_names = [AI_PROFILES[p].name for p in profile_options]
+                    current_idx = profile_options.index(current_ai_profile) if current_ai_profile in profile_options else 1
+                    
+                    new_profile = st.selectbox(
+                        "🤖 Modèle IA",
+                        options=profile_options,
+                        format_func=lambda x: AI_PROFILES[x].name,
+                        index=current_idx,
+                        key=f"ai_profile_{wallet.id}",
+                        label_visibility="collapsed"
+                    )
+                    
+                    # Save if changed
+                    if new_profile != current_ai_profile:
+                        if wallet.address not in config.trading.wallets:
+                            config.trading.wallets[wallet.address] = {}
+                        config.trading.wallets[wallet.address]['ai_profile'] = new_profile
+                        config.trading.wallets[wallet.address]['name'] = wallet.name
+                        save_config(config)
+                        st.toast(f"✅ Modèle {AI_PROFILES[new_profile].name} appliqué à {wallet.name}")
                 
                 with col_w4:
+                    # Show profile info
+                    profile = AI_PROFILES.get(new_profile, AI_PROFILES['modere'])
+                    st.caption(f"Score min: {profile.min_score}")
+                    st.caption(f"Trade: {profile.trade_amount_pct}%")
+                
+                with col_w5:
                     # Boutons d'action
                     if not wallet.is_active:
                         if st.button("✅", key=f"activate_{wallet.id}", help="Activer ce wallet"):
@@ -180,6 +214,21 @@ with col_list:
                 st.markdown("---")
     else:
         st.info("📭 Aucun wallet enregistré. Créez votre premier wallet!")
+    
+    # AI Profiles legend
+    with st.expander("ℹ️ Profils IA - Explication"):
+        st.markdown("""
+        | Profil | Score Min | Trade % | Max Pos | Style |
+        |--------|-----------|---------|---------|-------|
+        | 🛡️ **Conservateur** | 80 | 5% | 3 | Prudent, peu de trades |
+        | ⚖️ **Modéré** | 65 | 10% | 5 | Équilibré |
+        | 🔥 **Agressif** | 50 | 20% | 10 | Plus de trades, plus de risque |
+        | 🎰 **Degen** | 40 | 30% | 15 | YOLO mode 🚀 |
+        
+        **Score Min** = Score IA minimum pour déclencher un BUY  
+        **Trade %** = Pourcentage du portfolio par trade  
+        **Max Pos** = Nombre max de positions simultanées
+        """)
 
 with col_actions:
     # ========== CRÉER NOUVEAU WALLET ==========

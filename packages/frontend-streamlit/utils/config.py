@@ -32,6 +32,84 @@ class APIKeys:
     
 
 @dataclass
+class AIProfile:
+    """AI trading profile settings"""
+    name: str = "Modéré"
+    min_score: int = 65  # Minimum score to trigger BUY
+    trade_amount_pct: float = 10.0  # % of portfolio per trade
+    max_positions: int = 5  # Max simultaneous positions
+    stop_loss_pct: float = 15.0  # Stop loss percentage
+    take_profit_pct: float = 30.0  # Take profit percentage
+    fear_greed_weight: float = 0.25  # Weight for Fear & Greed
+    trends_weight: float = 0.20  # Weight for Google Trends
+    news_weight: float = 0.15  # Weight for CryptoPanic news
+    auto_execute: bool = True  # Auto-execute trades
+
+
+# Predefined AI profiles
+AI_PROFILES = {
+    'conservateur': AIProfile(
+        name="🛡️ Conservateur",
+        min_score=80,
+        trade_amount_pct=5.0,
+        max_positions=3,
+        stop_loss_pct=10.0,
+        take_profit_pct=20.0,
+        fear_greed_weight=0.30,
+        trends_weight=0.15,
+        news_weight=0.10,
+        auto_execute=False
+    ),
+    'modere': AIProfile(
+        name="⚖️ Modéré",
+        min_score=65,
+        trade_amount_pct=10.0,
+        max_positions=5,
+        stop_loss_pct=15.0,
+        take_profit_pct=30.0,
+        fear_greed_weight=0.25,
+        trends_weight=0.20,
+        news_weight=0.15,
+        auto_execute=True
+    ),
+    'agressif': AIProfile(
+        name="🔥 Agressif",
+        min_score=50,
+        trade_amount_pct=20.0,
+        max_positions=10,
+        stop_loss_pct=25.0,
+        take_profit_pct=50.0,
+        fear_greed_weight=0.20,
+        trends_weight=0.25,
+        news_weight=0.20,
+        auto_execute=True
+    ),
+    'degen': AIProfile(
+        name="🎰 Degen",
+        min_score=40,
+        trade_amount_pct=30.0,
+        max_positions=15,
+        stop_loss_pct=50.0,
+        take_profit_pct=100.0,
+        fear_greed_weight=0.15,
+        trends_weight=0.30,
+        news_weight=0.25,
+        auto_execute=True
+    ),
+}
+
+
+@dataclass
+class WalletConfig:
+    """Configuration for a wallet"""
+    address: str = ""
+    name: str = ""
+    network: str = "ethereum"
+    ai_profile: str = "modere"  # Key from AI_PROFILES
+    enabled: bool = True
+
+
+@dataclass
 class TradingSettings:
     """Trading-related settings"""
     max_slippage: float = 1.0
@@ -44,6 +122,8 @@ class TradingSettings:
     min_market_cap: float = 0.0  # 0 = no minimum
     max_market_cap: float = 0.0  # 0 = no maximum (any cap)
     # Preset: small_cap = 1M-100M, micro_cap = 0-1M, mid_cap = 100M-1B
+    # Wallets with AI profiles
+    wallets: Dict[str, dict] = field(default_factory=dict)  # {address: WalletConfig as dict}
 
 
 @dataclass
