@@ -216,32 +216,38 @@ def get_wallet_config(wallet_id: str) -> dict:
 
 
 def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_usd: float) -> tuple:
-    """Execute a real buy via KyberSwap (or fallback to Paraswap)"""
+    """Execute a real buy - tries multiple DEXes in sequence"""
     if not REAL_TRADING_AVAILABLE:
-        return False, "Real trading module not available", None
+        return False, "Real trading module not available", None, 0
     
     address = wallet_cfg.get('address', '')
     chain = wallet_cfg.get('chain', 'base')
     
     if not address:
-        return False, "Wallet has no address", None
+        return False, "Wallet has no address", None, 0
     
     if not has_private_key(address):
-        return False, "No private key stored for this wallet", None
+        return False, "No private key stored for this wallet", None, 0
     
-    # Use KyberSwap if available
+    errors = []
+    
+    # 1. Try KyberSwap first (aggregator, best prices)
     if SWAP_PROVIDER == "kyberswap":
-        success, msg, tx_hash, amount_out = buy_token_kyber(
-            wallet_address=address,
-            token_address=token_address,
-            amount_usd=amount_usd,
-            use_usdc=True,  # Use USDC for swaps
-        )
-        if tx_hash:
-            msg += f" (tx: {tx_hash})"
-        return success, msg, tx_hash, amount_out
-    else:
-        # Fallback to old method
+        try:
+            success, msg, tx_hash, amount_out = buy_token_kyber(
+                wallet_address=address,
+                token_address=token_address,
+                amount_usd=amount_usd,
+                use_usdc=True,
+            )
+            if success:
+                return True, f"[KyberSwap] {msg}", tx_hash, amount_out
+            errors.append(f"KyberSwap: {msg}")
+        except Exception as e:
+            errors.append(f"KyberSwap: {str(e)}")
+    
+    # 2. Try Paraswap (aggregator)
+    try:
         from utils.real_trader import buy_token
         success, msg, tx_hash = buy_token(
             chain=chain,
@@ -249,10 +255,33 @@ def execute_real_buy(wallet_cfg: dict, symbol: str, token_address: str, amount_u
             token_symbol=symbol,
             token_address=token_address,
             amount_usd=amount_usd,
+            use_aerodrome=False,  # Try Paraswap first
         )
-        if tx_hash:
-            msg += f" (tx: {tx_hash})"
-        return success, msg, tx_hash, 0
+        if success:
+            return True, f"[Paraswap] {msg}", tx_hash, 0
+        errors.append(f"Paraswap: {msg}")
+    except Exception as e:
+        errors.append(f"Paraswap: {str(e)}")
+    
+    # 3. Try Aerodrome directly (native Base DEX)
+    try:
+        from utils.real_trader import buy_token
+        success, msg, tx_hash = buy_token(
+            chain=chain,
+            wallet_address=address,
+            token_symbol=symbol,
+            token_address=token_address,
+            amount_usd=amount_usd,
+            use_aerodrome=True,  # Force Aerodrome
+        )
+        if success:
+            return True, f"[Aerodrome] {msg}", tx_hash, 0
+        errors.append(f"Aerodrome: {msg}")
+    except Exception as e:
+        errors.append(f"Aerodrome: {str(e)}")
+    
+    # All DEXes failed
+    return False, f"All DEXes failed: {'; '.join(errors)}", None, 0
 
 
 def execute_real_sell(wallet_cfg: dict, symbol: str, token_address: str, amount: float, decimals: int = 18) -> tuple:

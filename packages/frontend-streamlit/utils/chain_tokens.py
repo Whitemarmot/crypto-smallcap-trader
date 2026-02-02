@@ -36,23 +36,29 @@ def get_trending_tokens_on_chain(chain: str, min_liquidity: float = None,
     
     supported_dexes = CHAIN_DEXES.get(chain, [])
     
-    # Search terms by mcap tier
-    SEARCH_TERMS_SMALL = [
-        'meme', 'ai', 'degen', 'pepe', 'dog', 'cat', 'moon', 'based', 'brett',
-        'frog', 'ape', 'wojak', 'chad', 'bobo', 'apu', 'toshi', 'normie',
-        'bald', 'fomo', 'wagmi', 'gm', 'ser', 'anon', 'wen', 'pump', 'flower',
-    ]
-    SEARCH_TERMS_MID = [
-        'aero', 'virtual', 'morpho', 'seamless', 'extra', 'well', 'alien',
-        'cbeth', 'cbbtc', 'usdc', 'dai', 'weth', 'comp', 'uni', 'link',
-        'render', 'ondo', 'friend', 'higher', 'lower', 'zora', 'farcaster',
+    # Expanded search terms for maximum token discovery
+    SEARCH_TERMS = [
+        # Memecoins & culture
+        'meme', 'pepe', 'degen', 'brett', 'toshi', 'dog', 'cat', 'frog', 'ape',
+        'wojak', 'chad', 'bobo', 'apu', 'normie', 'bald', 'anon', 'based',
+        'moon', 'pump', 'wagmi', 'gm', 'ser', 'wen', 'fomo', 'flower',
+        # AI & Tech
+        'ai', 'gpt', 'agent', 'virtual', 'render', 'gpu', 'compute',
+        # DeFi
+        'aero', 'morpho', 'seamless', 'extra', 'well', 'alien', 'swap',
+        'lend', 'yield', 'vault', 'stake', 'farm', 'pool', 'liquidity',
+        # Stables & majors (for pairs)
+        'cbeth', 'cbbtc', 'usdc', 'weth', 'eth', 'btc',
+        # Social & NFT
+        'friend', 'higher', 'lower', 'zora', 'farcaster', 'lens', 'social',
+        # Gaming
+        'game', 'play', 'nft', 'pixel', 'world',
+        # Other trending
+        'ondo', 'comp', 'uni', 'link', 'super', 'magic', 'gold', 'silver',
+        'punk', 'rare', 'gem', 'token', 'coin', 'base', 'layer',
     ]
     
-    # Use appropriate search terms based on max_mcap
-    if max_mcap >= 100_000_000:  # Mid cap or higher
-        search_terms = SEARCH_TERMS_MID + SEARCH_TERMS_SMALL[:5]
-    else:
-        search_terms = SEARCH_TERMS_SMALL
+    search_terms = SEARCH_TERMS
     
     all_tokens = []
     seen_addresses = set()
