@@ -41,7 +41,7 @@ def load_json(path, default):
         pass
     return default
 
-def analyze_token(symbol: str, name: str = None) -> dict:
+def analyze_token(symbol: str, name: str = None, dex_momentum: float = None) -> dict:
     """Full analysis of a single token"""
     result = {
         'symbol': symbol,
@@ -64,6 +64,29 @@ def analyze_token(symbol: str, name: str = None) -> dict:
     reasons = []
     
     tech = result.get('technical', {})
+    
+    # Use DexScreener momentum (passed from caller or from tech data)
+    dex_change = dex_momentum if dex_momentum is not None else tech.get('change_24h', 0)
+    if dex_change:
+        if dex_change >= 10:
+            score += 25
+            reasons.append(f"Strong momentum (+{dex_change:.1f}%)")
+        elif dex_change >= 5:
+            score += 15
+            reasons.append(f"Good momentum (+{dex_change:.1f}%)")
+        elif dex_change >= 2:
+            score += 10
+            reasons.append(f"Positive momentum (+{dex_change:.1f}%)")
+        elif dex_change >= 0:
+            score += 5
+            reasons.append(f"Slight momentum (+{dex_change:.1f}%)")
+        elif dex_change >= -5:
+            reasons.append(f"Slight dip ({dex_change:.1f}%)")
+        else:
+            score -= 10
+            reasons.append(f"Significant drop ({dex_change:.1f}%)")
+    
+    # Traditional technical indicators (if available)
     if tech.get('rsi_signal') == 'OVERSOLD':
         score += 15
         reasons.append(f"RSI oversold ({tech.get('rsi', 0):.0f})")
@@ -291,8 +314,9 @@ def main():
     for t in tradable_tokens[:5]:
         symbol = t.get('symbol', '')
         name = t.get('name', '')
+        momentum = t.get('price_change_24h', 0)
         
-        analysis = analyze_token(symbol, name)
+        analysis = analyze_token(symbol, name, dex_momentum=momentum)
         analysis['cmc_data'] = {
             'price': t.get('price'),
             'change_24h': t.get('price_change_24h'),
@@ -357,7 +381,7 @@ def main():
             cash = wallet_data.get('portfolio', {}).get('USDC', 0)
         
         # Analyze positions for this wallet
-        position_analysis = analyze_wallet_positions(wallet, tokens)
+        position_analysis = analyze_wallet_positions(wallet, tradable_tokens)
         
         # Calculate wallet totals
         positions_value = sum(p.get('current_price', p.get('avg_price', 0)) * p.get('amount', 0) 
