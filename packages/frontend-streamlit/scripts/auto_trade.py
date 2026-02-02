@@ -528,28 +528,47 @@ def run_bot():
                     for t in sorted_tokens[:30]
                 ])
                 
-                prompt = f"""Tu es un trader crypto expert. Analyse et donne tes décisions de trading.
+                prompt = f"""Tu es un trader crypto expert quantitatif. Analyse en profondeur et raisonne étape par étape.
 
-MARCHÉ: Fear & Greed = {fg_val}/100 {'(EXTREME FEAR - opportunité?)' if fg_val < 25 else ''}
-CHAIN: {chain}
-PROFIL: {profile_key.upper()} (score min: {profile.min_score})
+## CONTEXTE MARCHÉ
+- Fear & Greed Index: {fg_val}/100 {'⚠️ EXTREME FEAR = potentielle opportunité contrarian' if fg_val < 25 else '(neutre)' if fg_val < 55 else '⚠️ GREED = prudence'}
+- Chain focus: {chain}
+- Profil: {profile_key.upper()} (min score: {profile.min_score})
 
-TOKENS ({mcap_key} cap, ${mcap['min']/1e6:.0f}M - ${mcap['max']/1e6:.0f}M):
+## TOKENS À ANALYSER ({len(sorted_tokens)} total, top 30 par momentum)
 {token_list}
 
-INSTRUCTIONS IMPORTANTES:
-1. Analyse la tendance 24h de chaque token
-2. Pour chaque BUY, DONNE OBLIGATOIREMENT les niveaux en PRIX (pas en %):
-   - stop_loss: prix de protection (environ -10% à -15% du prix actuel)
-   - tp1: premier objectif (environ +15% à +25%)
-   - tp2: objectif ambitieux (environ +40% à +60%)
-3. Confidence doit être >= {profile.min_score}
-4. Max 3 décisions
+## PROCESSUS DE RAISONNEMENT
 
-Réponds UNIQUEMENT avec un JSON array valide:
-[{{"symbol": "XXX", "action": "BUY", "confidence": 75, "stop_loss": 0.0045, "tp1": 0.0058, "tp2": 0.0072, "reason": "..."}}]
+Avant de donner tes décisions, raisonne explicitement:
 
-Si aucune opportunité intéressante, réponds: []
+1. **ANALYSE MACRO**: Quel est le sentiment global ? Comment les top performers se comportent-ils vs le marché ?
+
+2. **FILTRAGE**: Parmi les 30 tokens, lesquels montrent:
+   - Momentum positif malgré le sentiment négatif ? (force relative)
+   - Volume/MCap ratio intéressant ?
+   - Pattern de prix favorable ?
+
+3. **RISK MANAGEMENT**: Pour chaque candidat:
+   - Où placer le stop-loss (support technique ou -12% max) ?
+   - Quel TP1 réaliste (+20-30%) ?
+   - Quel TP2 optimiste (+50-80%) ?
+
+4. **SCORING**: Attribue une confidence basée sur:
+   - Force du momentum (poids: 40%)
+   - Solidité du support (poids: 30%)
+   - Risk/reward ratio (poids: 30%)
+
+## FORMAT DE RÉPONSE
+
+D'abord, écris ton raisonnement en 2-3 lignes par token analysé.
+
+Puis termine par un JSON array:
+```json
+[{{"symbol": "XXX", "action": "BUY", "confidence": 75, "stop_loss": 0.0045, "tp1": 0.0058, "tp2": 0.0072, "reason": "résumé court"}}]
+```
+
+Si aucune opportunité intéressante après analyse: `[]`
 """
                 
                 # Call AI
@@ -558,10 +577,26 @@ Si aucune opportunité intéressante, réponds: []
                 response = call_llm(prompt, provider, model)
                 
                 if response:
-                    # Parse response
+                    # Extract reasoning (everything before JSON)
                     import re
+                    
+                    # Find JSON array
+                    match = re.search(r'\[.*\]', response, re.DOTALL)
+                    
+                    if match:
+                        # Get reasoning (text before JSON)
+                        reasoning = response[:match.start()].strip()
+                        if reasoning:
+                            # Clean up markdown formatting
+                            reasoning = re.sub(r'```json\s*', '', reasoning)
+                            reasoning = re.sub(r'```\s*', '', reasoning)
+                            log("🧠 RAISONNEMENT IA:")
+                            for line in reasoning.split('\n')[:15]:  # Limit to 15 lines
+                                if line.strip():
+                                    log(f"   {line.strip()}")
+                    
+                    # Parse JSON
                     try:
-                        match = re.search(r'\[.*\]', response, re.DOTALL)
                         decisions = json.loads(match.group()) if match else []
                     except Exception as e:
                         decisions = []
