@@ -203,6 +203,13 @@ if wallets:
         type_badge = "🎮 SIMULATION" if is_sim else "💳 RÉEL"
         type_color = "#a855f7" if is_sim else "#22c55e"
         
+        # Get address for real wallets
+        wallet_address = wallet.get('address', '')
+        address_html = ""
+        if wallet_address:
+            short_addr = f"{wallet_address[:6]}...{wallet_address[-4:]}"
+            address_html = f'<div style="font-size: 0.75em; color: #aaa; font-family: monospace; margin-top: 5px;">🔑 {short_addr}</div>'
+        
         # Wallet card
         st.markdown(f"""
         <div class="{style_class}">
@@ -210,6 +217,7 @@ if wallets:
                 <div class="wallet-header">
                     {'🟢' if wallet.get('enabled') else '⚪'} {wallet['name']}
                     <span style="font-size: 0.65em; background: {type_color}; color: #000; padding: 3px 10px; border-radius: 12px; margin-left: 10px; font-weight: bold;">{type_badge}</span>
+                    {address_html}
                 </div>
                 <div style="text-align: right;">
                     <div style="font-size: 1.6em; font-weight: bold; color: #fff;">${total_value:,.2f}</div>
@@ -218,6 +226,10 @@ if wallets:
             </div>
         </div>
         """, unsafe_allow_html=True)
+        
+        # Show full address for real wallets
+        if wallet_address:
+            st.code(wallet_address, language=None)
         
         # Expandable config
         with st.expander(f"⚙️ Configurer {wallet['name']}", expanded=False):
