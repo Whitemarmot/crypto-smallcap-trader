@@ -72,6 +72,67 @@ recent_trades = db.get_trades(limit=10)
 total_portfolio_value = 0
 wallet_balances = {}
 
+# Try to get paper trading wallet values
+import os
+import json
+
+WALLETS_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'wallets')
+WALLETS_CONFIG = os.path.join(WALLETS_DIR, 'config.json')
+SIM_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'simulation.json')
+
+def load_wallet_config():
+    try:
+        if os.path.exists(WALLETS_CONFIG):
+            with open(WALLETS_CONFIG, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {'wallets': []}
+
+def load_wallet_data(wallet_id):
+    # Try wallets folder first
+    wallet_path = os.path.join(WALLETS_DIR, f"{wallet_id}.json")
+    if os.path.exists(wallet_path):
+        with open(wallet_path, 'r') as f:
+            return json.load(f)
+    # Fallback to legacy simulation.json
+    if wallet_id == 'simulation' and os.path.exists(SIM_PATH):
+        with open(SIM_PATH, 'r') as f:
+            return json.load(f)
+    return {'portfolio': {'USDC': 0}, 'positions': {}}
+
+# Load paper trading wallets
+paper_wallet_config = load_wallet_config()
+paper_wallets_data = []
+
+for pw in paper_wallet_config.get('wallets', []):
+    if not pw.get('enabled', True):
+        continue
+    wallet_id = pw.get('id', '')
+    wallet_data = load_wallet_data(wallet_id)
+    
+    cash = wallet_data.get('portfolio', {}).get('USDC', 0)
+    positions = wallet_data.get('positions', {})
+    
+    # Estimate positions value (use avg_price as fallback)
+    positions_value = sum(
+        p.get('amount', 0) * p.get('avg_price', 0) 
+        for p in positions.values()
+    )
+    wallet_value = cash + positions_value
+    
+    paper_wallets_data.append({
+        'id': wallet_id,
+        'name': pw.get('name', wallet_id),
+        'type': pw.get('type', 'paper'),
+        'cash': cash,
+        'positions_count': len(positions),
+        'total_value': wallet_value,
+        'max_positions': pw.get('max_positions', 10),
+    })
+    total_portfolio_value += wallet_value
+
+# Also try on-chain balances for real wallets
 try:
     from utils.balance import get_all_balances, get_prices
     BALANCE_AVAILABLE = True
@@ -81,6 +142,8 @@ except ImportError:
 if BALANCE_AVAILABLE and wallets:
     for wallet in wallets:
         try:
+            if not wallet.address:
+                continue
             balances = get_all_balances(wallet.address, wallet.network)
             if balances:
                 symbols = [b.symbol for b in balances]
@@ -106,30 +169,57 @@ with col1:
     )
 
 with col2:
+    total_wallets = len(paper_wallets_data) + stats.get('total_wallets', 0)
     st.metric(
         label="👛 Wallets",
-        value=str(stats['total_wallets']),
-        delta=f"{len([w for w in wallets if w.is_active])} actif" if wallets else None
+        value=str(total_wallets),
+        delta=f"{len(paper_wallets_data)} paper" if paper_wallets_data else None
     )
 
 with col3:
+    total_positions = sum(pw.get('positions_count', 0) for pw in paper_wallets_data)
     st.metric(
-        label="📝 Paper Trading",
-        value=str(stats['paper_trades']),
-        delta="En cours" if stats['paper_trades'] > 0 else "Aucune"
+        label="📈 Positions",
+        value=str(total_positions),
+        delta="Paper trading" if paper_wallets_data else None
     )
 
 with col4:
+    recent_trades = stats.get('recent_trades_24h', 0)
+    total_trades = stats.get('total_trades', 0)
     st.metric(
         label="📊 Trades (24h)",
-        value=str(stats['recent_trades_24h']),
-        delta=f"Total: {stats['total_trades']}" if stats['total_trades'] > 0 else None
+        value=str(recent_trades),
+        delta=f"Total: {total_trades}" if total_trades > 0 else None
     )
 
 st.markdown("---")
 
-# ========== VUE WALLETS ==========
-st.subheader("👛 Wallets")
+# ========== PAPER TRADING WALLETS ==========
+if paper_wallets_data:
+    st.subheader("🎮 Paper Trading Wallets")
+    
+    for pw in paper_wallets_data:
+        with st.container():
+            col_info, col_cash, col_positions, col_value = st.columns([3, 2, 2, 2])
+            
+            with col_info:
+                st.markdown(f"**{pw['name']}**")
+                st.caption(f"ID: {pw['id']} | Max: {pw['max_positions']} positions")
+            
+            with col_cash:
+                st.metric("💵 Cash", f"${pw['cash']:,.2f}")
+            
+            with col_positions:
+                st.metric("📊 Positions", f"{pw['positions_count']}/{pw['max_positions']}")
+            
+            with col_value:
+                st.metric("💰 Total", f"${pw['total_value']:,.2f}")
+        
+        st.markdown("---")
+
+# ========== VUE WALLETS (On-chain) ==========
+st.subheader("👛 Wallets On-Chain")
 
 if wallets:
     for wallet in wallets:
