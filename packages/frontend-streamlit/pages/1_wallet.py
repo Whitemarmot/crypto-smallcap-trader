@@ -3,6 +3,7 @@
 """
 
 import streamlit as st
+import pandas as pd
 import json
 import os
 from datetime import datetime
@@ -49,8 +50,22 @@ CHAINS = {
     'solana': {'name': 'Solana', 'icon': '🟣'},
 }
 
+# Stablecoin addresses by chain
+STABLECOINS = {
+    'base': {
+        'USDC': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+    },
+    'ethereum': {
+        'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+        'USDT': '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+    },
+    'arbitrum': {
+        'USDC': '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+    },
+}
 
-@st.cache_data(ttl=60)  # Cache 1 minute
+
+@st.cache_data(ttl=60)
 def get_eth_price() -> float:
     """Get ETH price from CMC API"""
     import requests
@@ -67,45 +82,24 @@ def get_eth_price() -> float:
     return 2500  # Fallback
 
 
-# Stablecoin addresses by chain
-STABLECOINS = {
-    'base': {
-        'USDC': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-    },
-    'ethereum': {
-        'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-        'USDT': '0xdAC17F958D2ee523a2206206994597C13D831ec7',
-    },
-    'arbitrum': {
-        'USDC': '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-    },
-}
-
-
-@st.cache_data(ttl=60)  # Cache 1 minute
+@st.cache_data(ttl=60)
 def get_onchain_balance(address: str, chain: str) -> dict:
     """Get on-chain ETH + stablecoin balances"""
     try:
         from web3 import Web3
-        # Convert to checksum address
         address = Web3.to_checksum_address(address)
         
         trader = RealTrader(chain=chain)
         
-        # Get ETH balance
         eth_balance = trader.w3.eth.get_balance(address)
         eth_amount = float(trader.w3.from_wei(eth_balance, 'ether'))
-        
-        # Get ETH price from CMC
         eth_price_usd = get_eth_price()
         eth_usd = eth_amount * eth_price_usd
         
-        # Get stablecoin balances
         stables = STABLECOINS.get(chain, {})
         stablecoin_usd = 0
         stablecoin_balances = {}
         
-        # ERC20 balanceOf ABI
         balance_abi = [{"constant": True, "inputs": [{"name": "account", "type": "address"}], "name": "balanceOf", "outputs": [{"name": "", "type": "uint256"}], "type": "function"}]
         
         for symbol, token_addr in stables.items():
@@ -115,11 +109,10 @@ def get_onchain_balance(address: str, chain: str) -> dict:
                     abi=balance_abi
                 )
                 balance = contract.functions.balanceOf(address).call()
-                # USDC/USDT have 6 decimals
                 decimals = 6
                 token_balance = balance / (10 ** decimals)
                 stablecoin_balances[symbol] = token_balance
-                stablecoin_usd += token_balance  # 1:1 for stablecoins
+                stablecoin_usd += token_balance
             except Exception as e:
                 print(f"Error getting {symbol} balance: {e}")
         
@@ -132,9 +125,10 @@ def get_onchain_balance(address: str, chain: str) -> dict:
             'stablecoins': stablecoin_balances,
             'stablecoin_usd': stablecoin_usd,
             'usd': total_usd,
+            'status': 'ok'
         }
     except Exception as e:
-        return {'eth': 0, 'usd': 0, 'eth_price': 0, 'stablecoins': {}, 'stablecoin_usd': 0, 'error': str(e)}
+        return {'eth': 0, 'usd': 0, 'eth_price': 0, 'stablecoins': {}, 'stablecoin_usd': 0, 'error': str(e), 'status': 'error'}
 
 
 def load_wallets_config():
@@ -218,86 +212,172 @@ def delete_wallet(wallet_id):
         os.remove(path)
 
 
-# ========== PAGE ==========
-st.title("👛 Gestion des Wallets")
+def get_status_indicator(wallet, balance_status=None):
+    """Retourne l'indicateur de statut visuel"""
+    if not wallet.get('enabled'):
+        return "⚪", "Désactivé"
+    if balance_status == 'error':
+        return "🔴", "Erreur connexion"
+    if wallet.get('type') == 'real' and not wallet.get('address'):
+        return "🟡", "Adresse manquante"
+    return "🟢", "Actif"
 
-config = load_wallets_config()
-wallets = config.get('wallets', [])
 
-# ========== WALLET LIST ==========
-if wallets:
-    for wallet in wallets:
-        wallet_id = wallet['id']
-        wallet_type = wallet.get('type', 'paper')
-        is_sim = wallet_type == 'paper'
-        
-        data = load_wallet_data(wallet_id)
-        positions = data.get('positions', {})
-        
-        # Header with type badge
-        type_badge = "🎮 SIMULATION" if is_sim else "💳 RÉEL"
-        status_icon = '🟢' if wallet.get('enabled') else '⚪'
-        
-        st.subheader(f"{status_icon} {wallet['name']} — {type_badge}")
-        
-        # Wallet address for real wallets
+def render_wallet_card(wallet, config):
+    """Affiche une carte wallet avec toutes ses infos"""
+    wallet_id = wallet['id']
+    wallet_type = wallet.get('type', 'paper')
+    is_sim = wallet_type == 'paper'
+    
+    data = load_wallet_data(wallet_id)
+    positions = data.get('positions', {})
+    
+    # Calculer balances
+    balance_status = 'ok'
+    if is_sim:
+        cash = data.get('portfolio', {}).get('USDC', 0)
+        positions_value = sum(
+            pos.get('amount', 0) * pos.get('avg_price', 0) 
+            for pos in positions.values()
+        )
+        total_value = cash + positions_value
+        eth_amount = 0
+        stablecoins = {}
+    else:
         wallet_address = wallet.get('address', '')
         if wallet_address:
-            st.code(wallet_address)
-        
-        # Get balance based on wallet type
-        if is_sim:
-            # Paper wallet: use JSON data
-            cash = data.get('portfolio', {}).get('USDC', 0)
-            total_value = cash
-            for sym, pos in positions.items():
-                total_value += pos.get('amount', 0) * pos.get('avg_price', 0)
-            cash_label = "💵 Cash (USDC)"
-            positions_value = total_value - cash
-            extra_balances = None
+            chain = wallet.get('chain', 'base')
+            balance = get_onchain_balance(wallet_address, chain)
+            balance_status = balance.get('status', 'error')
+            eth_amount = balance.get('eth', 0)
+            eth_usd = balance.get('eth_usd', 0)
+            stablecoins = balance.get('stablecoins', {})
+            stablecoin_usd = balance.get('stablecoin_usd', 0)
+            
+            positions_value = sum(
+                pos.get('amount', 0) * pos.get('current_price', pos.get('avg_price', 0))
+                for pos in positions.values()
+            )
+            
+            cash = eth_usd + stablecoin_usd
+            total_value = cash + positions_value
         else:
-            # Real wallet: get on-chain balance
-            if wallet_address:
-                chain = wallet.get('chain', 'base')
-                balance = get_onchain_balance(wallet_address, chain)
-                eth_usd = balance.get('eth_usd', 0)
-                eth_amount = balance.get('eth', 0)
-                stablecoin_usd = balance.get('stablecoin_usd', 0)
-                stablecoins = balance.get('stablecoins', {})
-                
-                # Calculate positions value (tokens we bought)
-                positions_value = 0
-                for sym, pos in positions.items():
-                    # Use current price if available, else avg_price
-                    price = pos.get('current_price', pos.get('avg_price', 0))
-                    positions_value += pos.get('amount', 0) * price
-                
-                cash = eth_usd + stablecoin_usd  # ETH + stablecoins = cash
-                total_value = cash + positions_value
-                
-                # Build cash label with breakdown
-                parts = [f"ETH ({eth_amount:.4f})"]
-                for sym, amt in stablecoins.items():
-                    if amt > 0:
-                        parts.append(f"{sym} ({amt:.2f})")
-                cash_label = "💵 " + " + ".join(parts)
-                extra_balances = {'eth': eth_amount, 'eth_usd': eth_usd, 'stablecoins': stablecoins}
-            else:
-                cash = 0
-                total_value = 0
-                positions_value = 0
-                cash_label = "💵 Cash"
-                extra_balances = None
+            cash = 0
+            total_value = 0
+            positions_value = 0
+            eth_amount = 0
+            stablecoins = {}
+    
+    # Calcul P&L
+    initial = wallet.get('initial_capital', 0) if is_sim else cash
+    pnl = total_value - initial if initial > 0 else 0
+    pnl_pct = (pnl / initial * 100) if initial > 0 else 0
+    
+    # Header avec statut
+    status_icon, status_text = get_status_indicator(wallet, balance_status)
+    chain_info = CHAINS.get(wallet.get('chain', 'base'), {'icon': '🔵', 'name': 'Base'})
+    
+    # Container pour le wallet
+    with st.container():
+        # Titre avec statut
+        header_cols = st.columns([0.5, 4, 2])
+        with header_cols[0]:
+            st.markdown(f"### {status_icon}")
+        with header_cols[1]:
+            st.markdown(f"### {wallet['name']}")
+        with header_cols[2]:
+            st.caption(f"{chain_info['icon']} {chain_info['name']} • {status_text}")
         
-        # Stats
+        # Adresse pour wallets réels
+        if not is_sim and wallet.get('address'):
+            st.code(wallet.get('address'), language=None)
+        
+        # Metrics cards
+        st.markdown("---")
         col1, col2, col3, col4 = st.columns(4)
-        col1.metric("💰 Valeur totale", f"${total_value:,.2f}")
-        col2.metric(cash_label, f"${cash:,.2f}")
-        col3.metric("📊 Positions", f"{len(positions)}/{wallet.get('max_positions', 10)}")
-        col4.metric("⛓️ Chain", wallet.get('chain', 'base').upper())
         
-        # Config expander
-        with st.expander("⚙️ Configuration"):
+        with col1:
+            st.metric(
+                label="💰 Valeur Totale",
+                value=f"${total_value:,.2f}",
+                delta=f"{pnl:+,.2f} ({pnl_pct:+.1f}%)" if initial > 0 else None,
+                delta_color="normal"
+            )
+        
+        with col2:
+            if is_sim:
+                st.metric(
+                    label="💵 Cash (USDC)",
+                    value=f"${cash:,.2f}"
+                )
+            else:
+                # Afficher ETH + stablecoins
+                eth_display = f"Ξ{eth_amount:.4f}" if eth_amount > 0 else "$0"
+                stable_parts = [f"{sym} ${amt:,.2f}" for sym, amt in stablecoins.items() if amt > 0]
+                st.metric(
+                    label="💵 Liquidités",
+                    value=f"${cash:,.2f}",
+                    help=f"ETH: {eth_amount:.4f}\n" + "\n".join(stable_parts) if stable_parts else f"ETH: {eth_amount:.4f}"
+                )
+        
+        with col3:
+            st.metric(
+                label="📊 Positions Ouvertes",
+                value=f"{len(positions)} / {wallet.get('max_positions', 10)}",
+                delta=f"${positions_value:,.2f}" if positions_value > 0 else None
+            )
+        
+        with col4:
+            profile = AI_PROFILES.get(wallet.get('ai_profile', 'modere'), AI_PROFILES['modere'])
+            st.metric(
+                label="🎯 Profil",
+                value=profile['name'].split(' ')[0],  # Emoji only
+                help=profile['name']
+            )
+        
+        # Section Positions (si existantes)
+        if positions:
+            with st.expander(f"📈 Positions ouvertes ({len(positions)})", expanded=False):
+                positions_data = []
+                for symbol, pos in positions.items():
+                    amount = pos.get('amount', 0)
+                    avg_price = pos.get('avg_price', 0)
+                    current_price = pos.get('current_price', avg_price)
+                    value = amount * current_price
+                    cost = amount * avg_price
+                    pos_pnl = value - cost
+                    pos_pnl_pct = (pos_pnl / cost * 100) if cost > 0 else 0
+                    
+                    # Indicateur de performance
+                    if pos_pnl_pct >= 10:
+                        perf_icon = "🟢"
+                    elif pos_pnl_pct >= 0:
+                        perf_icon = "🔵"
+                    elif pos_pnl_pct >= -10:
+                        perf_icon = "🟡"
+                    else:
+                        perf_icon = "🔴"
+                    
+                    positions_data.append({
+                        'Statut': perf_icon,
+                        'Token': symbol,
+                        'Quantité': f"{amount:,.4f}",
+                        'Prix Achat': f"${avg_price:.6f}",
+                        'Prix Actuel': f"${current_price:.6f}",
+                        'Valeur': f"${value:,.2f}",
+                        'P&L': f"{pos_pnl:+,.2f} ({pos_pnl_pct:+.1f}%)"
+                    })
+                
+                if positions_data:
+                    df = pd.DataFrame(positions_data)
+                    st.dataframe(
+                        df,
+                        use_container_width=True,
+                        hide_index=True
+                    )
+        
+        # Configuration
+        with st.expander("⚙️ Configuration", expanded=False):
             col1, col2, col3, col4 = st.columns(4)
             
             with col1:
@@ -358,13 +438,18 @@ if wallets:
                 )
             
             with col8:
-                enabled = st.checkbox("✅ Actif", value=wallet.get('enabled', True), key=f"enabled_{wallet_id}")
+                enabled = st.checkbox(
+                    "✅ Actif", 
+                    value=wallet.get('enabled', True), 
+                    key=f"enabled_{wallet_id}"
+                )
             
-            # Actions
-            col_save, col_reset, col_delete = st.columns([2, 1, 1])
+            # Boutons d'action
+            st.markdown("---")
+            action_cols = st.columns([2, 1, 1, 2])
             
-            with col_save:
-                if st.button("💾 Sauvegarder", key=f"save_{wallet_id}", type="primary"):
+            with action_cols[0]:
+                if st.button("💾 Sauvegarder", key=f"save_{wallet_id}", type="primary", use_container_width=True):
                     for w in config['wallets']:
                         if w['id'] == wallet_id:
                             w['ai_profile'] = new_profile
@@ -378,79 +463,216 @@ if wallets:
                             w['updated_at'] = datetime.now().isoformat()
                             break
                     save_wallets_config(config)
-                    st.success("✅ Sauvegardé!")
+                    st.success("✅ Configuration sauvegardée!")
                     st.rerun()
             
-            with col_reset:
-                if is_sim and st.button("🔄 Reset", key=f"reset_{wallet_id}"):
-                    initial = wallet.get('initial_capital', 10000)
-                    save_wallet_data(wallet_id, {
-                        'portfolio': {'USDC': initial},
-                        'positions': {},
-                        'history': [],
-                        'closed_positions': []
-                    })
-                    st.success(f"✅ Reset à ${initial:,}")
-                    st.rerun()
+            with action_cols[1]:
+                if is_sim:
+                    if st.button("🔄 Reset", key=f"reset_{wallet_id}", use_container_width=True):
+                        initial = wallet.get('initial_capital', 10000)
+                        save_wallet_data(wallet_id, {
+                            'portfolio': {'USDC': initial},
+                            'positions': {},
+                            'history': [],
+                            'closed_positions': []
+                        })
+                        st.success(f"✅ Reset à ${initial:,}")
+                        st.rerun()
             
-            with col_delete:
-                if st.button("🗑️ Supprimer", key=f"delete_{wallet_id}"):
+            with action_cols[2]:
+                if st.button("🗑️ Supprimer", key=f"delete_{wallet_id}", use_container_width=True):
                     st.session_state[f"confirm_delete_{wallet_id}"] = True
             
+            # Confirmation de suppression
             if st.session_state.get(f"confirm_delete_{wallet_id}"):
-                st.warning(f"⚠️ Supprimer '{wallet['name']}' ?")
-                c1, c2 = st.columns(2)
-                if c1.button("✅ Oui", key=f"yes_{wallet_id}"):
-                    delete_wallet(wallet_id)
-                    del st.session_state[f"confirm_delete_{wallet_id}"]
-                    st.rerun()
-                if c2.button("❌ Non", key=f"no_{wallet_id}"):
-                    del st.session_state[f"confirm_delete_{wallet_id}"]
-                    st.rerun()
+                st.warning(f"⚠️ Êtes-vous sûr de vouloir supprimer '{wallet['name']}' ?")
+                confirm_cols = st.columns(2)
+                with confirm_cols[0]:
+                    if st.button("✅ Oui, supprimer", key=f"yes_{wallet_id}", type="primary"):
+                        delete_wallet(wallet_id)
+                        del st.session_state[f"confirm_delete_{wallet_id}"]
+                        st.rerun()
+                with confirm_cols[1]:
+                    if st.button("❌ Annuler", key=f"no_{wallet_id}"):
+                        del st.session_state[f"confirm_delete_{wallet_id}"]
+                        st.rerun()
+
+
+# ========== PAGE PRINCIPALE ==========
+st.title("👛 Gestion des Wallets")
+
+config = load_wallets_config()
+wallets = config.get('wallets', [])
+
+# Séparer wallets simulation et réels
+sim_wallets = [w for w in wallets if w.get('type', 'paper') == 'paper']
+real_wallets = [w for w in wallets if w.get('type', 'paper') == 'real']
+
+# Tabs principales
+tab_sim, tab_real, tab_create = st.tabs([
+    f"🎮 Simulation ({len(sim_wallets)})",
+    f"💳 Réel ({len(real_wallets)})",
+    "➕ Créer"
+])
+
+# ========== TAB SIMULATION ==========
+with tab_sim:
+    if sim_wallets:
+        # Résumé des wallets simulation
+        total_sim_value = 0
+        total_sim_positions = 0
         
-        st.divider()
-
-else:
-    st.info("📭 Aucun wallet. Crée-en un ci-dessous!")
-
-# ========== CREATE WALLET ==========
-st.subheader("➕ Créer un Wallet")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("### 🎮 Simulation")
-    st.caption("Paper trading avec argent virtuel")
-    
-    with st.form("create_sim"):
-        sim_name = st.text_input("Nom", value="Simulation")
-        sim_capital = st.number_input("Capital initial ($)", min_value=100, max_value=1000000, value=10000)
-        sim_chain = st.selectbox("Chain", list(CHAINS.keys()), format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}")
+        for wallet in sim_wallets:
+            data = load_wallet_data(wallet['id'])
+            cash = data.get('portfolio', {}).get('USDC', 0)
+            positions = data.get('positions', {})
+            pos_value = sum(
+                pos.get('amount', 0) * pos.get('avg_price', 0) 
+                for pos in positions.values()
+            )
+            total_sim_value += cash + pos_value
+            total_sim_positions += len(positions)
         
-        if st.form_submit_button("🎮 Créer", type="primary"):
-            create_wallet('paper', sim_name, sim_capital, sim_chain)
-            st.success(f"✅ '{sim_name}' créé!")
-            st.rerun()
-
-with col2:
-    st.markdown("### 💳 Réel")
-    st.caption("Trading avec vrais fonds")
-    
-    with st.form("create_real"):
-        real_name = st.text_input("Nom", value="Mon Wallet")
-        real_chain = st.selectbox("Chain", list(CHAINS.keys()), format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}", key="real_chain")
-        real_address = st.text_input("Adresse (0x...)", placeholder="0x...")
+        # Métriques globales
+        st.markdown("### 📊 Résumé Simulation")
+        summary_cols = st.columns(4)
+        with summary_cols[0]:
+            st.metric("🎮 Wallets Actifs", f"{len([w for w in sim_wallets if w.get('enabled')])}/{len(sim_wallets)}")
+        with summary_cols[1]:
+            st.metric("💰 Valeur Totale", f"${total_sim_value:,.2f}")
+        with summary_cols[2]:
+            st.metric("📈 Positions Totales", total_sim_positions)
+        with summary_cols[3]:
+            active_count = len([w for w in sim_wallets if w.get('enabled')])
+            st.metric("Statut", "🟢 Trading" if active_count > 0 else "⚪ Inactif")
         
-        if st.form_submit_button("💳 Créer"):
-            if real_address and real_address.startswith("0x") and len(real_address) == 42:
-                wallet_id = create_wallet('real', real_name, 0, real_chain)
-                cfg = load_wallets_config()
-                for w in cfg['wallets']:
-                    if w['id'] == wallet_id:
-                        w['address'] = real_address
-                        break
-                save_wallets_config(cfg)
-                st.success(f"✅ '{real_name}' créé!")
-                st.rerun()
+        st.markdown("---")
+        
+        # Liste des wallets
+        for wallet in sim_wallets:
+            render_wallet_card(wallet, config)
+            st.markdown("---")
+    else:
+        st.info("📭 Aucun wallet de simulation. Créez-en un dans l'onglet **➕ Créer**!")
+
+# ========== TAB RÉEL ==========
+with tab_real:
+    if real_wallets:
+        # Résumé des wallets réels
+        total_real_value = 0
+        total_real_positions = 0
+        connected_wallets = 0
+        
+        for wallet in real_wallets:
+            if wallet.get('address'):
+                connected_wallets += 1
+                chain = wallet.get('chain', 'base')
+                balance = get_onchain_balance(wallet.get('address'), chain)
+                if balance.get('status') == 'ok':
+                    total_real_value += balance.get('usd', 0)
+            
+            data = load_wallet_data(wallet['id'])
+            total_real_positions += len(data.get('positions', {}))
+        
+        # Métriques globales
+        st.markdown("### 📊 Résumé Portefeuille Réel")
+        summary_cols = st.columns(4)
+        with summary_cols[0]:
+            st.metric("💳 Wallets Connectés", f"{connected_wallets}/{len(real_wallets)}")
+        with summary_cols[1]:
+            st.metric("💰 Valeur On-Chain", f"${total_real_value:,.2f}")
+        with summary_cols[2]:
+            st.metric("📈 Positions Totales", total_real_positions)
+        with summary_cols[3]:
+            if connected_wallets == len(real_wallets) and connected_wallets > 0:
+                st.metric("Statut", "🟢 Connecté")
+            elif connected_wallets > 0:
+                st.metric("Statut", "🟡 Partiel")
             else:
-                st.error("❌ Adresse invalide")
+                st.metric("Statut", "🔴 Déconnecté")
+        
+        st.markdown("---")
+        
+        # Avertissement
+        st.warning("⚠️ **Attention**: Les wallets réels utilisent de vrais fonds. Tradez de manière responsable!")
+        
+        # Liste des wallets
+        for wallet in real_wallets:
+            render_wallet_card(wallet, config)
+            st.markdown("---")
+    else:
+        st.info("📭 Aucun wallet réel configuré. Créez-en un dans l'onglet **➕ Créer**!")
+
+# ========== TAB CRÉER ==========
+with tab_create:
+    st.markdown("### ➕ Créer un Nouveau Wallet")
+    
+    create_cols = st.columns(2)
+    
+    with create_cols[0]:
+        st.markdown("#### 🎮 Wallet Simulation")
+        st.caption("Paper trading avec capital virtuel - Idéal pour tester vos stratégies sans risque")
+        
+        with st.form("create_sim", clear_on_submit=True):
+            sim_name = st.text_input("📝 Nom du wallet", value="Ma Simulation", placeholder="Ex: Test Agressif")
+            sim_capital = st.number_input(
+                "💵 Capital initial ($)", 
+                min_value=100, 
+                max_value=1_000_000, 
+                value=10_000,
+                step=1000,
+                help="Montant virtuel pour commencer"
+            )
+            sim_chain = st.selectbox(
+                "⛓️ Blockchain", 
+                list(CHAINS.keys()), 
+                format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}",
+                index=1  # Base par défaut
+            )
+            
+            st.markdown("---")
+            
+            if st.form_submit_button("🎮 Créer Simulation", type="primary", use_container_width=True):
+                wallet_id = create_wallet('paper', sim_name, sim_capital, sim_chain)
+                st.success(f"✅ Wallet '{sim_name}' créé avec ${sim_capital:,} de capital!")
+                st.balloons()
+                st.rerun()
+    
+    with create_cols[1]:
+        st.markdown("#### 💳 Wallet Réel")
+        st.caption("Connectez un wallet existant pour trader avec de vrais fonds")
+        
+        with st.form("create_real", clear_on_submit=True):
+            real_name = st.text_input("📝 Nom du wallet", value="Mon Wallet", placeholder="Ex: Wallet Principal")
+            real_chain = st.selectbox(
+                "⛓️ Blockchain", 
+                list(CHAINS.keys()), 
+                format_func=lambda x: f"{CHAINS[x]['icon']} {CHAINS[x]['name']}",
+                key="real_chain",
+                index=1  # Base par défaut
+            )
+            real_address = st.text_input(
+                "🔗 Adresse du wallet", 
+                placeholder="0x...",
+                help="Adresse Ethereum/EVM de votre wallet"
+            )
+            
+            st.markdown("---")
+            
+            if st.form_submit_button("💳 Connecter Wallet", use_container_width=True):
+                if real_address and real_address.startswith("0x") and len(real_address) == 42:
+                    wallet_id = create_wallet('real', real_name, 0, real_chain)
+                    cfg = load_wallets_config()
+                    for w in cfg['wallets']:
+                        if w['id'] == wallet_id:
+                            w['address'] = real_address
+                            break
+                    save_wallets_config(cfg)
+                    st.success(f"✅ Wallet '{real_name}' connecté!")
+                    st.rerun()
+                else:
+                    st.error("❌ Adresse invalide. Format attendu: 0x... (42 caractères)")
+
+# Footer
+st.markdown("---")
+st.caption("💡 Astuce: Commencez par un wallet simulation pour tester vos stratégies avant de passer au réel!")
