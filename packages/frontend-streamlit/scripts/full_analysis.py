@@ -577,6 +577,48 @@ def main():
             print(f"\n📊 No BUY signals (all candidates HOLD or below threshold)", file=sys.stderr)
     
     print(json.dumps(output, indent=2, default=str))
+    
+    # ========== SAVE BOT STATUS ==========
+    try:
+        trades_count = len(output.get('auto_executed', []))
+        tokens_count = len(output.get('candidates', []))
+        buy_signals = len([c for c in output.get('candidates', []) if c.get('signal') == 'BUY'])
+        
+        # Build summary
+        summary_lines = []
+        if trades_count > 0:
+            summary_lines.append(f"🎯 {trades_count} trade(s) exécuté(s)")
+            for t in output.get('auto_executed', []):
+                summary_lines.append(f"  • {t.get('action')} {t.get('symbol')} ${t.get('amount_usd', 0):.2f}")
+        elif buy_signals > 0:
+            summary_lines.append(f"📊 {buy_signals} signal(s) BUY, pas de slots dispos")
+        else:
+            summary_lines.append(f"📊 Aucun signal BUY (seuil non atteint)")
+        
+        # Top tokens
+        top_tokens = sorted(output.get('candidates', []), key=lambda x: x.get('score', 0), reverse=True)[:5]
+        if top_tokens:
+            summary_lines.append("\n🏆 Top tokens:")
+            for t in top_tokens:
+                change = t.get('dex_momentum', 0) or t.get('cmc_data', {}).get('change_24h', 0) or 0
+                summary_lines.append(f"  • {t.get('symbol')}: {change:+.1f}% | score {t.get('score', 0)}")
+        
+        bot_status = {
+            'last_run': datetime.now().strftime('%H:%M'),
+            'last_run_ts': time.time(),
+            'status': 'ok' if trades_count > 0 else 'partial' if tokens_count > 0 else 'error',
+            'tokens_analyzed': tokens_count,
+            'buy_signals': buy_signals,
+            'trades_executed': trades_count,
+            'summary': '\n'.join(summary_lines),
+        }
+        
+        bot_status_path = os.path.join(DATA_DIR, 'bot_status.json')
+        with open(bot_status_path, 'w') as f:
+            json.dump(bot_status, f, indent=2)
+        print(f"\n✅ Bot status saved to {bot_status_path}", file=sys.stderr)
+    except Exception as e:
+        print(f"⚠️ Could not save bot status: {e}", file=sys.stderr)
 
 if __name__ == '__main__':
     main()

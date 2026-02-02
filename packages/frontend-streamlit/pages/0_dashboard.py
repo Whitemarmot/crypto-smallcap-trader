@@ -63,99 +63,99 @@ with col_refresh:
 st.markdown("---")
 
 # ========== BOT TRADING STATUS ==========
-import requests
+import subprocess
 import time
 
-OPENCLAW_API = "http://localhost:18789"
-OPENCLAW_TOKEN = "354943dd82e0b4e2860dd25a7fcebdfcfc2b079c2a5bf34e"
-CRON_JOB_ID = "d6ead671-90b7-4329-9d9b-28c033e29a30"
+BOT_STATUS_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'bot_status.json')
+CRON_INTERVAL_SEC = 3600  # 1 hour
 
-def get_cron_status():
-    """Get cron job status from OpenClaw API"""
+def get_bot_status():
+    """Get bot status from local file"""
     try:
-        resp = requests.get(
-            f"{OPENCLAW_API}/api/cron",
-            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
-            timeout=5
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            for job in data.get('jobs', []):
-                if job.get('id') == CRON_JOB_ID:
-                    return job
+        if os.path.exists(BOT_STATUS_FILE):
+            with open(BOT_STATUS_FILE, 'r') as f:
+                return json.load(f)
     except:
         pass
     return None
 
-def trigger_cron_now():
-    """Trigger cron job manually"""
+def run_analysis_now():
+    """Run analysis script directly"""
     try:
-        resp = requests.post(
-            f"{OPENCLAW_API}/api/cron/{CRON_JOB_ID}/run",
-            headers={"Authorization": f"Bearer {OPENCLAW_TOKEN}"},
-            timeout=10
+        script_path = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'full_analysis.py')
+        venv_python = os.path.join(os.path.dirname(__file__), '..', 'venv', 'bin', 'python')
+        
+        # Run in background
+        subprocess.Popen(
+            [venv_python, script_path],
+            cwd=os.path.dirname(script_path),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True
         )
-        return resp.status_code == 200
-    except:
+        return True
+    except Exception as e:
+        print(f"Error running analysis: {e}")
         return False
 
 # Bot status section
 st.subheader("🤖 Bot Trading")
 
-cron_status = get_cron_status()
+bot_status = get_bot_status()
 
-if cron_status:
-    col_countdown, col_last, col_trigger = st.columns([2, 2, 1])
-    
-    with col_countdown:
-        next_run_ms = cron_status.get('state', {}).get('nextRunAtMs', 0)
-        now_ms = int(time.time() * 1000)
-        remaining_ms = max(0, next_run_ms - now_ms)
-        remaining_sec = remaining_ms // 1000
+col_countdown, col_last, col_trigger = st.columns([2, 2, 1])
+
+with col_countdown:
+    if bot_status and bot_status.get('last_run_ts'):
+        last_run_ts = bot_status.get('last_run_ts', 0)
+        now_ts = time.time()
+        elapsed = now_ts - last_run_ts
+        remaining_sec = max(0, CRON_INTERVAL_SEC - elapsed)
         
-        minutes = remaining_sec // 60
-        seconds = remaining_sec % 60
+        minutes = int(remaining_sec // 60)
+        seconds = int(remaining_sec % 60)
         
-        if remaining_sec > 0:
+        if remaining_sec > 60:
             st.metric(
                 "⏱️ Prochain Run",
                 f"{minutes:02d}:{seconds:02d}",
-                delta="En attente" if cron_status.get('enabled') else "⏸️ Désactivé"
+                delta="🟢 Actif"
             )
         else:
-            st.metric("⏱️ Prochain Run", "Imminent", delta="🔄 En cours...")
-    
-    with col_last:
-        last_run_ms = cron_status.get('state', {}).get('lastRunAtMs', 0)
-        last_status = cron_status.get('state', {}).get('lastStatus', 'unknown')
-        last_duration = cron_status.get('state', {}).get('lastDurationMs', 0)
+            st.metric("⏱️ Prochain Run", "< 1 min", delta="🔄 Bientôt...")
+    else:
+        st.metric("⏱️ Prochain Run", "~60 min", delta="⏳ Premier run")
+
+with col_last:
+    if bot_status:
+        last_run = bot_status.get('last_run', 'Jamais')
+        last_status = bot_status.get('status', 'unknown')
+        tokens_analyzed = bot_status.get('tokens_analyzed', 0)
+        trades_executed = bot_status.get('trades_executed', 0)
         
-        if last_run_ms > 0:
-            last_run_time = datetime.fromtimestamp(last_run_ms / 1000)
-            time_ago = datetime.now() - last_run_time
-            mins_ago = int(time_ago.total_seconds() / 60)
-            
-            status_icon = "✅" if last_status == "ok" else "❌"
-            st.metric(
-                "📊 Dernier Run",
-                f"il y a {mins_ago}min",
-                delta=f"{status_icon} {last_duration/1000:.1f}s"
-            )
-        else:
-            st.metric("📊 Dernier Run", "Jamais", delta=None)
-    
-    with col_trigger:
-        st.write("")  # Spacing
-        if st.button("🚀 Run Now", use_container_width=True, type="primary"):
-            with st.spinner("Déclenchement..."):
-                if trigger_cron_now():
-                    st.success("✅ Bot lancé!")
-                    time.sleep(1)
-                    st.rerun()
-                else:
-                    st.error("❌ Erreur")
-else:
-    st.warning("⚠️ Bot non configuré - Cron job introuvable")
+        status_icon = "✅" if last_status == "ok" else "⚠️" if last_status == "partial" else "❌"
+        st.metric(
+            "📊 Dernier Run",
+            last_run,
+            delta=f"{status_icon} {tokens_analyzed} tokens, {trades_executed} trades"
+        )
+    else:
+        st.metric("📊 Dernier Run", "Jamais", delta="En attente du premier run")
+
+with col_trigger:
+    st.write("")  # Spacing
+    if st.button("🚀 Run Now", use_container_width=True, type="primary"):
+        with st.spinner("Lancement de l'analyse..."):
+            if run_analysis_now():
+                st.success("✅ Analyse lancée!")
+                st.info("Résultat dans ~30-60 sec. Rafraîchis pour voir.")
+            else:
+                st.error("❌ Erreur de lancement")
+
+# Show last analysis summary if available
+if bot_status and bot_status.get('summary'):
+    with st.expander("📋 Dernier résumé", expanded=False):
+        st.markdown(bot_status.get('summary', ''))
 
 st.markdown("---")
 
