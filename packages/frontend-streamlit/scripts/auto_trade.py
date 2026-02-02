@@ -418,16 +418,58 @@ def execute_sell(sim, symbol, price, reason):
     
     pos = sim['positions'][symbol]
     qty = pos['amount']
-    usd_value = qty * price
-    pnl = (price - pos['avg_price']) * qty
+    avg_price = pos.get('avg_price', price)
+    entry_date = pos.get('entry_date', '')
     
-    sim['portfolio']['USDC'] += usd_value
+    # Calculate P&L
+    entry_value = qty * avg_price
+    exit_value = qty * price
+    pnl_usd = exit_value - entry_value
+    pnl_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else 0
+    
+    # Calculate holding duration
+    holding_hours = 0
+    if entry_date:
+        try:
+            entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
+            holding_hours = round((datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600, 1)
+        except:
+            pass
+    
+    # Add cash
+    sim['portfolio']['USDC'] += exit_value
+    
+    # Add to closed positions
+    if 'closed_positions' not in sim:
+        sim['closed_positions'] = []
+    
+    sim['closed_positions'].append({
+        'symbol': symbol,
+        'entry_date': entry_date,
+        'exit_date': ts,
+        'holding_hours': holding_hours,
+        'qty': qty,
+        'entry_price': avg_price,
+        'exit_price': price,
+        'entry_value': round(entry_value, 2),
+        'exit_value': round(exit_value, 2),
+        'pnl_usd': round(pnl_usd, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'reason': reason,
+        'stop_loss': pos.get('stop_loss'),
+        'tp1': pos.get('tp1'),
+        'tp2': pos.get('tp2'),
+    })
+    
+    # Remove position
     del sim['positions'][symbol]
     
+    # Add to history
     sim['history'].append({
         'ts': ts, 'action': 'SELL', 'symbol': symbol,
-        'qty': qty, 'price': price, 'usd': usd_value,
-        'pnl': pnl, 'reason': reason, 'auto': True
+        'qty': qty, 'price': price, 'usd': exit_value,
+        'pnl_usd': round(pnl_usd, 2), 'pnl_pct': round(pnl_pct, 2),
+        'reason': reason, 'auto': True
     })
     return True
 

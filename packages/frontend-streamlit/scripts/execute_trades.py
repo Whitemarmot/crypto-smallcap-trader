@@ -120,10 +120,49 @@ def execute_sell(sim, symbol, price, reason=""):
     
     pos = sim['positions'][symbol]
     qty = pos['amount']
-    usd_value = qty * price
+    avg_price = pos.get('avg_price', price)
+    entry_date = pos.get('entry_date', '')
+    
+    # Calculate values
+    entry_value = qty * avg_price
+    exit_value = qty * price
+    pnl_usd = exit_value - entry_value
+    pnl_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else 0
+    
+    # Calculate holding duration
+    holding_hours = 0
+    if entry_date:
+        try:
+            entry_dt = datetime.fromisoformat(entry_date.replace('Z', '+00:00'))
+            holding_hours = round((datetime.now() - entry_dt.replace(tzinfo=None)).total_seconds() / 3600, 1)
+        except:
+            pass
     
     # Add cash
-    sim['portfolio']['USDC'] = sim.get('portfolio', {}).get('USDC', 0) + usd_value
+    sim['portfolio']['USDC'] = sim.get('portfolio', {}).get('USDC', 0) + exit_value
+    
+    # Add to closed positions list
+    if 'closed_positions' not in sim:
+        sim['closed_positions'] = []
+    
+    closed_pos = {
+        'symbol': symbol,
+        'entry_date': entry_date,
+        'exit_date': datetime.now().isoformat(),
+        'holding_hours': holding_hours,
+        'qty': qty,
+        'entry_price': avg_price,
+        'exit_price': price,
+        'entry_value': round(entry_value, 2),
+        'exit_value': round(exit_value, 2),
+        'pnl_usd': round(pnl_usd, 2),
+        'pnl_pct': round(pnl_pct, 2),
+        'reason': reason,
+        'stop_loss': pos.get('stop_loss'),
+        'tp1': pos.get('tp1'),
+        'tp2': pos.get('tp2'),
+    }
+    sim['closed_positions'].append(closed_pos)
     
     # Remove position
     del sim['positions'][symbol]
@@ -137,12 +176,15 @@ def execute_sell(sim, symbol, price, reason=""):
         'symbol': symbol,
         'qty': qty,
         'price': price,
-        'usd': usd_value,
+        'usd': exit_value,
+        'pnl_usd': round(pnl_usd, 2),
+        'pnl_pct': round(pnl_pct, 2),
         'auto': True,
         'reason': reason,
     })
     
-    return True, f"Sold {qty:.4f} {symbol} @ ${price:.6f} = ${usd_value:.2f}"
+    pnl_emoji = "🟢" if pnl_usd >= 0 else "🔴"
+    return True, f"Sold {qty:.4f} {symbol} @ ${price:.6f} = ${exit_value:.2f} | P&L: {pnl_emoji} ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)"
 
 def main():
     parser = argparse.ArgumentParser(description='Execute trades from JSON decisions')

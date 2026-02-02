@@ -261,6 +261,17 @@ def main():
         positions_value = sum(p.get('current_price', p.get('avg_price', 0)) * p.get('amount', 0) 
                             for p in position_analysis if p.get('current_price') or p.get('avg_price'))
         
+        # Get closed positions
+        closed_positions = wallet_data.get('closed_positions', [])
+        # Get last 10 closed positions
+        recent_closed = closed_positions[-10:] if closed_positions else []
+        
+        # Calculate closed P&L stats
+        total_closed_pnl = sum(p.get('pnl_usd', 0) for p in closed_positions)
+        win_count = sum(1 for p in closed_positions if p.get('pnl_usd', 0) > 0)
+        loss_count = sum(1 for p in closed_positions if p.get('pnl_usd', 0) < 0)
+        win_rate = round(win_count / len(closed_positions) * 100, 1) if closed_positions else 0
+        
         wallet_info = {
             'id': wallet['id'],
             'name': wallet['name'],
@@ -272,6 +283,14 @@ def main():
             'max_positions': max_pos,
             'slots_available': max_pos - len(positions),
             'positions': position_analysis,
+            'closed_positions': recent_closed,
+            'closed_stats': {
+                'total_trades': len(closed_positions),
+                'wins': win_count,
+                'losses': loss_count,
+                'win_rate': win_rate,
+                'total_pnl_usd': round(total_closed_pnl, 2),
+            },
         }
         
         wallets_analysis.append(wallet_info)
