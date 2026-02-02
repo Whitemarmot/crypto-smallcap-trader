@@ -366,40 +366,7 @@ if real_wallets_data:
 else:
     st.info("💳 Aucun wallet réel configuré.")
 
-# ========== VUE WALLETS (Database - legacy) ==========
-if wallets:
-    st.subheader("👛 Wallets On-Chain (DB)")
-    
-    for wallet in wallets:
-        wallet_data = wallet_balances.get(wallet.id, {'total_value': 0, 'balances': []})
-        balance_value = wallet_data['total_value']
-        balances = wallet_data.get('balances', [])
-        
-        with st.container():
-            col_info, col_balance, col_tokens, col_action = st.columns([3, 2, 3, 1])
-            
-            with col_info:
-                network_icon = SUPPORTED_NETWORKS.get(wallet.network, {}).get('icon', '🔗')
-                status_icon = "🟢" if wallet.is_active else "⚪"
-                st.markdown(f"**{status_icon} {wallet.name}**")
-                st.caption(f"{network_icon} {wallet.network.upper()} | `{wallet.address[:10]}...{wallet.address[-6:]}`")
-            
-            with col_balance:
-                st.metric("Balance", f"${balance_value:,.2f}")
-            
-            with col_tokens:
-                if balances:
-                    prices = wallet_data.get('prices', {})
-                    tokens_str = ", ".join([f"{b.symbol}: {b.balance:.4f}" for b in balances[:3]])
-                    st.caption(f"🪙 {tokens_str}")
-                else:
-                    st.caption("📭 Aucun token")
-            
-            with col_action:
-                if st.button("👁️", key=f"view_{wallet.id}", help="Voir détails"):
-                    st.switch_page("pages/1_wallet.py")
-        
-        st.markdown("---")
+# NOTE: Legacy DB wallets section removed - using config.json system now
 
 # ========== ALLOCATION PIE CHART ==========
 if total_portfolio_value > 0 and BALANCE_AVAILABLE:
